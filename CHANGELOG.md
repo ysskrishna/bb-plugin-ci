@@ -6,7 +6,7 @@
 
 ### Added
 
-- `always-test` input: run the checks even when the BB under test is a stable release inside `engines.bb`. A pass closes any open `bb-compat` issue; a failure opens or updates "bb X fails: <check>".
+- `always-test` input: run the checks even when the BB under test is a stable release inside `engines.bb`. A pass on the latest BB, or on the version an open `bb-compat` issue is about, closes that issue; a failure opens or updates "bb X fails: <check>".
 - `fail-on-error` input (default on): when off, a failing check is reported in the issue without failing the run.
 - The self-test covers both: a forced failure, then a full typecheck and smoke test on the latest BB.
 
