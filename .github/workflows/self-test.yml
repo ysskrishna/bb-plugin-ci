@@ -1,9 +1,16 @@
 name: Self-test
 
-# Runs bb-compat against Idle Compact twice. First the BB nightly, a
-# prerelease, so the full install, check and smoke path runs and this
-# repository gets a bb-compat issue. Then the latest BB, which is inside
-# engines.bb, so nothing is tested and that issue is closed again.
+# Runs bb-compat against Idle Compact four times, in order:
+# 1. nightly: the BB nightly (a prerelease) with a trivial check. It passes and
+#    opens a "passes the checks (prerelease)" issue.
+# 2. current: the latest BB, inside engines.bb, without always-test. Nothing is
+#    tested, and that issue closes.
+# 3. fails: the latest BB with always-test and a check that always fails, with
+#    fail-on-error off so the run stays green. It opens "bb X fails: false".
+# 4. passes: the latest BB with always-test and the default typecheck and smoke
+#    test, the recommended daily pattern. It passes and closes that issue.
+# verify checks all four. "current" assumes the latest BB is inside Idle
+# Compact's engines.bb, which holds once its range is open-ended (>=0.50.1).
 on:
   pull_request:
     paths:
@@ -19,47 +26,62 @@ permissions:
   contents: read
   issues: write
 
-# Both runs share this repository's one bb-compat issue, so never overlap.
+# The runs share this repository's one bb-compat issue, so never overlap.
 concurrency:
   group: self-test
   cancel-in-progress: false
 
 jobs:
-  newer:
+  nightly:
     uses: ./.github/workflows/bb-compat.yml
     with:
       repository: ysskrishna/bb-idle-compact
       bb-version: nightly
-      codex-version: 0.169.0
-      apt-packages: lsof procps
+      checks: node --version
 
   current:
-    needs: newer
+    needs: nightly
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/bb-compat.yml
     with:
       repository: ysskrishna/bb-idle-compact
+
+  fails:
+    needs: current
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/bb-compat.yml
+    with:
+      repository: ysskrishna/bb-idle-compact
+      always-test: true
+      fail-on-error: false
+      checks: "false"
+
+  passes:
+    needs: fails
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/bb-compat.yml
+    with:
+      repository: ysskrishna/bb-idle-compact
+      always-test: true
       codex-version: 0.169.0
       apt-packages: lsof procps
 
   verify:
-    needs: [newer, current]
+    needs: [nightly, current, fails, passes]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}
     steps:
       - env:
-          NEWER: ${{ toJSON(needs.newer.outputs) }}
-          CURRENT: ${{ toJSON(needs.current.outputs) }}
+          RESULTS: ${{ toJSON(needs) }}
         run: |
-          echo "newer: $NEWER"
-          echo "current: $CURRENT"
+          echo "$RESULTS"
           node -e '
-            const newer = JSON.parse(process.env.NEWER);
-            const current = JSON.parse(process.env.CURRENT);
+            const needs = JSON.parse(process.env.RESULTS);
+            const [nightly, current, fails, passes] = ["nightly", "current", "fails", "passes"].map((job) => needs[job].outputs);
             const expect = (ok, what) => { if (!ok) throw new Error(what); };
-            expect(newer.tested === "true", "the nightly run did not test");
-            expect(["created", "updated"].includes(newer.action), "the nightly run did not open an issue");
-            expect(current.tested === "false", "the latest run tested; is latest outside engines.bb?");
-            expect(current.action === "closed" && current.issue === newer.issue, "the latest run did not close that issue");
+            expect(nightly.tested === "true" && ["created", "updated"].includes(nightly.action), "nightly: tested, and opened an issue");
+            expect(current.tested === "false" && current.action === "closed" && current.issue === nightly.issue, "current: tested nothing and closed that issue");
+            expect(fails.tested === "true" && fails.action === "created", "fails: tested and opened an issue");
+            expect(passes.tested === "true" && passes.action === "closed" && passes.issue === fails.issue, "passes: tested and closed that issue");
           '

@@ -1,9 +1,10 @@
 name: BB compat
 
-# Reusable workflow. When a BB release falls outside the plugin's engines.bb
-# (or is a prerelease asked for by bb-version), run the plugin's checks against
-# it and keep one open `bb-compat` issue with the result. When engines.bb
-# includes the latest BB, close that issue.
+# Reusable workflow. When a BB release falls outside the plugin's engines.bb,
+# is a prerelease asked for by bb-version, or always-test is set, run the
+# plugin's checks against it and keep one open `bb-compat` issue with the
+# result. Close that issue once engines.bb includes the latest BB, or, with
+# always-test, once the checks pass on the latest BB.
 on:
   workflow_call:
     outputs:
@@ -40,6 +41,14 @@ on:
         description: Extra shell commands to run after npm ci.
         type: string
         default: ""
+      always-test:
+        description: Run the checks even when the BB under test is a stable release inside engines.bb.
+        type: boolean
+        default: false
+      fail-on-error:
+        description: Fail the run when a check fails. When false, the failure is only reported in the issue.
+        type: boolean
+        default: true
       checks:
         description: One command per line, each run with a clean environment (only PATH and HOME).
         type: string
@@ -58,6 +67,7 @@ jobs:
       range: ${{ steps.resolve.outputs.range }}
       prerelease: ${{ steps.resolve.outputs.prerelease }}
       latest: ${{ steps.resolve.outputs.latest }}
+      in-range: ${{ steps.resolve.outputs.in-range }}
       test: ${{ steps.resolve.outputs.test }}
       sdk: ${{ steps.install.outputs.sdk }}
       failed: ${{ steps.checks.outputs.failed }}
@@ -73,6 +83,7 @@ jobs:
         id: resolve
         env:
           BB_VERSION: ${{ inputs.bb-version || 'latest' }}
+          ALWAYS_TEST: ${{ inputs.always-test }}
         run: |
           set -euo pipefail
           version=$(npm view "bb-app@$BB_VERSION" version)
@@ -89,9 +100,11 @@ jobs:
           prerelease=false; [[ "$version" == *-* ]] && prerelease=true
           latest=false; [ "$version" = "$(npm view bb-app@latest version)" ] && latest=true
           # A prerelease is only tested when asked for, and then always tested.
-          test=true; [ "$in_range" = true ] && [ "$prerelease" = false ] && test=false
+          test=true
+          [ "$in_range" = true ] && [ "$prerelease" = false ] && [ "$ALWAYS_TEST" != true ] && test=false
           echo "bb-app $version, engines.bb $range, in range: $in_range, prerelease: $prerelease, test: $test"
-          { echo "version=$version"; echo "range=$range"; echo "prerelease=$prerelease"; echo "latest=$latest"; echo "test=$test"; } >> "$GITHUB_OUTPUT"
+          { echo "version=$version"; echo "range=$range"; echo "prerelease=$prerelease"; echo "latest=$latest"
+            echo "in-range=$in_range"; echo "test=$test"; } >> "$GITHUB_OUTPUT"
       - if: steps.resolve.outputs.test == 'true'
         run: npm ci
       - if: steps.resolve.outputs.test == 'true' && inputs.apt-packages != ''
@@ -124,14 +137,35 @@ jobs:
               if (installed(name) !== want) throw new Error(`wanted ${name} ${want}, installed ${installed(name)}`);
             }
           ' "$VERSION" "$sdk"
-          echo "bb-app $VERSION ships @get-bb/plugin-sdk $sdk"
+          # BB refuses to run a plugin whose engines.bb excludes it, so the
+          # working copy (never committed) declares the version under test.
+          # Replace only the value, so the file keeps its formatting for format checks.
+          node -e '
+            const fs = require("node:fs");
+            const [version] = process.argv.slice(1);
+            const text = fs.readFileSync("package.json", "utf8");
+            const range = JSON.parse(text).engines.bb;
+            const from = `"bb": ${JSON.stringify(range)}`;
+            if (text.split(from).length !== 2) throw new Error(`cannot find ${from} once in package.json`);
+            const next = text.replace(from, `"bb": ${JSON.stringify(version)}`);
+            if (JSON.parse(next).engines.bb !== version) throw new Error("engines.bb was not updated");
+            fs.writeFileSync("package.json", next);
+          ' "$VERSION"
+          echo "bb-app $VERSION ships @get-bb/plugin-sdk $sdk; engines.bb set to $VERSION for the checks"
           echo "sdk=$sdk" >> "$GITHUB_OUTPUT"
       - name: Run checks
         id: checks
         if: steps.resolve.outputs.test == 'true'
         env:
           CHECKS: ${{ inputs.checks }}
+          FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
         run: |
+          fail() {
+            echo "failed=$1" >> "$GITHUB_OUTPUT"
+            if [ "$FAIL_ON_ERROR" = true ]; then echo "::error::$2"; exit 1; fi
+            echo "::warning::$2 (fail-on-error is off; the issue records it)"
+            exit 0
+          }
           ran=0
           while IFS= read -r cmd; do
             [[ -z "${cmd// /}" ]] && continue
@@ -139,18 +173,12 @@ jobs:
             echo "::group::$cmd"
             if ! env -i PATH="$PATH" HOME="$HOME" bash -euo pipefail -c "$cmd"; then
               echo "::endgroup::"
-              echo "::error::Check failed: $cmd"
-              echo "failed=$cmd" >> "$GITHUB_OUTPUT"
-              exit 1
+              fail "$cmd" "Check failed: $cmd"
             fi
             echo "::endgroup::"
           done <<< "$CHECKS"
-          if [ "$ran" -eq 0 ]; then
-            echo "::error::The checks input has no commands"
-            echo "failed=(the checks input is empty)" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-      - if: failure()
+          if [ "$ran" -eq 0 ]; then fail "(the checks input is empty)" "The checks input has no commands"; fi
+      - if: failure() || steps.checks.outputs.failed != ''
         uses: actions/upload-artifact@v4
         with:
           name: bb-compat-${{ steps.resolve.outputs.version }}-${{ github.run_attempt }}
@@ -184,6 +212,7 @@ jobs:
           VERSION: ${{ needs.check.outputs.version }}
           RANGE: ${{ needs.check.outputs.range }}
           PRERELEASE: ${{ needs.check.outputs.prerelease }}
+          IN_RANGE: ${{ needs.check.outputs.in-range }}
           TESTED: ${{ needs.check.outputs.test }}
           SDK: ${{ needs.check.outputs.sdk }}
           RESULT: ${{ needs.check.result }}
@@ -207,15 +236,32 @@ jobs:
             echo "bb $VERSION is inside engines.bb $RANGE; nothing to test." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          if [ "$PRERELEASE" = true ]; then
+          ok=true
+          if [ -n "$FAILED" ] || [ "$RESULT" != success ]; then ok=false; fi
+          if [ "$IN_RANGE" = true ] && [ "$PRERELEASE" = false ]; then
+            # Tested because of always-test. A pass on the latest BB, or on the
+            # version an open issue is about, settles that issue.
+            if [ "$ok" = true ]; then
+              if [ -n "$number" ] && { [ "$LATEST" = true ] || [ "$(cut -d' ' -f2 <<< "$title")" = "$VERSION" ]; }; then
+                gh issue close "$number" --comment "bb $VERSION passes the checks. Run: $RUN_URL"
+                { echo "action=closed"; echo "issue=$number"; } >> "$GITHUB_OUTPUT"
+              else
+                echo "action=none" >> "$GITHUB_OUTPUT"
+              fi
+              echo "bb $VERSION passes the checks." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            intro="bb-app $VERSION (plugin SDK ${SDK:-unknown}) is inside \`engines.bb\` \`$RANGE\` of $PLUGIN."
+            closes="closes it once the checks pass on the latest bb"
+          elif [ "$PRERELEASE" = true ]; then
             intro="bb-app $VERSION (plugin SDK ${SDK:-unknown}) is a prerelease. \`engines.bb\` of $PLUGIN is \`$RANGE\`."
           else
             intro="bb-app $VERSION (plugin SDK ${SDK:-unknown}) is outside \`engines.bb\` \`$RANGE\` of $PLUGIN."
           fi
-          if [ "$RESULT" = success ] && [ "$PRERELEASE" = true ]; then
+          if [ "$ok" = true ] && [ "$PRERELEASE" = true ]; then
             new_title="bb $VERSION passes the checks (prerelease)"
             outcome="All checks passed. Nothing to change until a stable release falls outside \`engines.bb\`."
-          elif [ "$RESULT" = success ]; then
+          elif [ "$ok" = true ]; then
             new_title="bb $VERSION passes: widen engines.bb to include it"
             outcome="All checks passed, so it is safe to widen \`engines.bb\` to include $VERSION."
           elif [ -n "$FAILED" ]; then
@@ -234,7 +280,7 @@ jobs:
 
           Run: $RUN_URL
 
-          The bb-compat workflow updates this issue and closes it once \`engines.bb\` includes the latest bb."
+          The bb-compat workflow updates this issue and ${closes:-closes it once \`engines.bb\` includes the latest bb}."
           echo "$body" >> "$GITHUB_STEP_SUMMARY"
           old_version=$(cut -d' ' -f2 <<< "$title")
           if [ "$PRERELEASE" = true ] && [ -n "$number" ] && [[ "$old_version" != *-* ]]; then
