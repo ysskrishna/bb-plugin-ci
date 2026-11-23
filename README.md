@@ -27,8 +27,9 @@ How `bb-compat` works:
    green.
 3. Otherwise (a prerelease such as the nightly, or a stable release outside
    `engines.bb`) it runs `npm ci`, installs that `bb-app` plus the `@get-bb/plugin-sdk`
-   version the release ships (read from its bundle), and runs the plugin's
-   checks, each with only `PATH` and `HOME` set.
+   version the release ships (read from its bundle), sets `engines.bb` in the
+   working copy to that version (BB will not run a plugin outside it), and runs
+   the plugin's checks, each with only `PATH` and `HOME` set.
 4. It keeps at most one open issue labelled `bb-compat`, with a link to the run:
    - "bb X fails: <check>" when a check fails. A failing check also fails the
      run. Later runs update the issue and comment only when the outcome

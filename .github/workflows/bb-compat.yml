@@ -124,7 +124,10 @@ jobs:
               if (installed(name) !== want) throw new Error(`wanted ${name} ${want}, installed ${installed(name)}`);
             }
           ' "$VERSION" "$sdk"
-          echo "bb-app $VERSION ships @get-bb/plugin-sdk $sdk"
+          # BB refuses to run a plugin whose engines.bb excludes it, so the
+          # working copy (never committed) declares the version under test.
+          npm pkg set "engines.bb=$VERSION"
+          echo "bb-app $VERSION ships @get-bb/plugin-sdk $sdk; engines.bb set to $VERSION for the checks"
           echo "sdk=$sdk" >> "$GITHUB_OUTPUT"
       - name: Run checks
         id: checks
