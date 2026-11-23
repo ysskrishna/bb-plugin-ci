@@ -9,8 +9,8 @@ Shared GitHub Actions workflows for [BB](https://getbb.app) plugins.
 
 BB already refuses to install or update a plugin whose `engines.bb` excludes the
 running BB. What it cannot do is warn the plugin author before a new BB release
-leaves the plugin behind. The `bb-compat` workflow does that every week, from a
-short caller workflow in each plugin.
+leaves the plugin behind. The `bb-compat` workflow does that on the schedule
+each plugin's short caller workflow sets (weekly in the example below).
 
 ## Features
 
@@ -77,7 +77,7 @@ caller file itself. To try a newer BB before it is the latest, dispatch with
 
 | Input | Default | Purpose |
 | --- | --- | --- |
-| `bb-version` | `latest` | bb-app version or dist-tag to test. |
+| `bb-version` | empty (latest) | bb-app version or dist-tag to test. |
 | `checks` | `npm run typecheck` and `npm run e2e:smoke` | One command per line. |
 | `node-version` | `22` | Node.js version. |
 | `codex-version` | empty | Installs `@openai/codex` globally, for scratch e2e fixtures that need it. |
@@ -107,7 +107,8 @@ and the [bb-compat issues](https://github.com/ysskrishna/bb-plugin-ci/issues?q=l
 ## Versions
 
 Callers pin the major tag `v1`. Moving `v1` to a newer commit is a deliberate
-release step: merge the change, check the self-test run on `main`, then move
+release step: merge the change, run the self-test on `main`
+(`gh workflow run self-test.yml --ref main`) and wait for it to pass, then move
 the tag with `git tag -f v1 <commit> && git push -f origin v1` and say so in the
 PR or release notes. A breaking change to inputs or behavior gets a new `v2`
 tag instead. [AGENTS.md](AGENTS.md#releases) has the full release steps.
@@ -127,13 +128,17 @@ the changed workflow against Idle Compact, and the pull request shows the
 result. To try a change from a plugin before a release, point its caller at
 your branch (`@your-branch`) instead of `@v1`.
 
+The self-test writes issues in this repository, which a pull request from a
+fork cannot do, so its last job fails there. The maintainer re-runs such a
+change from a branch in this repository.
+
 </details>
 
 ## Project links
 
 - [Releases](https://github.com/ysskrishna/bb-plugin-ci/releases) and [issues](https://github.com/ysskrishna/bb-plugin-ci/issues)
 - [Security policy](SECURITY.md)
-- Plugins that use it: [Idle Compact](https://github.com/ysskrishna/bb-idle-compact), [Profiles](https://github.com/ysskrishna/bb-profiles) and [Thread Inbox](https://github.com/ysskrishna/bb-thread-inbox)
+- Written for [Idle Compact](https://github.com/ysskrishna/bb-idle-compact), [Profiles](https://github.com/ysskrishna/bb-profiles) and [Thread Inbox](https://github.com/ysskrishna/bb-thread-inbox)
 
 ## Built and maintained by
 

@@ -17,9 +17,19 @@ is no guaranteed response time or bug bounty program.
 ## Workflow access
 
 `bb-compat` runs in the calling repository with the permissions the caller
-grants. The job that installs and runs the plugin's code has `contents: read`
-and does not keep the checkout token. A separate job with `issues: write` reads,
-creates, edits and closes issues labelled `bb-compat` in the calling repository;
-it runs no plugin code. Inputs reach shell steps through environment variables,
-not expression interpolation. The workflow downloads packages from the npm
-registry and, when asked, apt packages and `@openai/codex`. It uses no secrets.
+grants and the job's `github.token`; it reads no other secrets.
+
+- The check job installs and runs the plugin's code with `contents: read` and
+  does not keep the checkout token. `npm ci` lifecycle scripts and the `setup`
+  input run with the job's full environment; each `checks` command runs with
+  only `PATH` and `HOME`. `setup` and `checks` are shell commands by design, so
+  callers must treat them as code.
+- On failure it uploads `e2e-artifacts/` as a run artifact, which anyone who can
+  read the repository's Actions runs can download.
+- A separate report job with `issues: write` runs no plugin code. It creates or
+  updates the `bb-compat` label, and creates, edits, comments on and closes
+  issues with that label.
+- Inputs reach shell steps through environment variables, not expression
+  interpolation.
+- It downloads packages from the npm registry and, when asked, apt packages and
+  `@openai/codex`.

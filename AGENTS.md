@@ -39,10 +39,12 @@ repository.
 
 ## Releases
 
-- Callers pin the major tag `v1`. The first `v1` tag goes on the merge commit
-  of the workflow PR, after the self-test passes on `main`.
-- To release: move the `## [Unreleased]` notes into a `## [1.Y.Z] - YYYY-MM-DD`
-  section through a PR. After it merges and the self-test passes on `main`, tag
+- Callers pin the major tag `v1`. The first release is `v1.0.0`, and `v1`
+  starts on the same commit.
+- To release: move the `## [Unreleased]` notes into a `## [1.Y.Z]` section
+  through a PR. After it merges, run the self-test on `main`
+  (`gh workflow run self-test.yml --ref main`; a changelog-only merge does not
+  start it) and wait for it to pass. Then tag
   that commit with `git tag -a v1.Y.Z -m 'Release v1.Y.Z'`, push the tag, and
   publish a GitHub Release from that changelog section. Then move `v1` to the
   same commit (`git tag -f v1 <commit> && git push -f origin v1`) and say so in

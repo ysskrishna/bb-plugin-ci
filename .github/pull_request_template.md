@@ -25,7 +25,7 @@ large: every plugin calling @v1 once v1 moves. Say why. -->
 
 ## Checklist
 
-- [ ] Self-test passes on this pull request
+- [ ] Self-test passes on this pull request, or this pull request changes no workflow
 - [ ] README inputs, outputs and caller example match the workflow
 - [ ] CHANGELOG describes user-visible changes under `## [Unreleased]`
 - [ ] Moving `v1` is planned as a separate release step, not part of this PR
