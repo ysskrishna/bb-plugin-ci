@@ -9,48 +9,56 @@ Shared GitHub Actions workflows for [BB](https://getbb.app) plugins.
 
 BB already refuses to install or update a plugin whose `engines.bb` excludes the
 running BB. What it cannot do is warn the plugin author before a new BB release
-leaves the plugin behind. The `bb-compat` workflow does that on the schedule
-each plugin's short caller workflow sets (weekly in the example below).
+leaves the plugin behind. The `bb-compat` workflow does that: the recommended
+caller runs it every day against the BB nightly, so a breaking change shows up
+before it reaches a stable release.
 
 ## Features
 
 | Workflow | What it does |
 | --- | --- |
-| **bb-compat** | Tests a plugin against a BB release outside its `engines.bb` (or a prerelease you ask for) and keeps one `bb-compat` issue with the result. |
+| **bb-compat** | Tests a plugin against the BB nightly (or a stable release outside its `engines.bb`) and keeps one `bb-compat` issue while something needs attention. |
 
 How `bb-compat` works:
 
-1. It resolves `bb-app@latest` (or the `bb-version` input) and reads `engines.bb`
-   from the plugin's `package.json`.
+1. It resolves the `bb-version` input (a version or dist-tag such as `nightly`;
+   empty means `latest`) and reads `engines.bb` from the plugin's `package.json`.
 2. If that BB is a stable release inside `engines.bb`, it tests nothing and ends
    green. When that BB is the latest, it also closes any open `bb-compat` issue.
-3. Otherwise (a stable release outside `engines.bb`, or a prerelease you asked
-   for) it runs `npm ci`, installs that `bb-app` plus the `@get-bb/plugin-sdk`
+3. Otherwise (a prerelease such as the nightly, or a stable release outside
+   `engines.bb`) it runs `npm ci`, installs that `bb-app` plus the `@get-bb/plugin-sdk`
    version the release ships (read from its bundle), and runs the plugin's
    checks, each with only `PATH` and `HOME` set.
-4. It keeps one open issue labelled `bb-compat`: "bb X passes: widen engines.bb
-   to include it", "bb X passes the checks (prerelease)", or "bb X fails:
-   <check>", with a link to the run. A failing check also fails the run. A
-   prerelease result never replaces an open issue about a stable release.
+4. It keeps one open issue labelled `bb-compat`, with a link to the run:
+   - "bb X fails: <check>" when a check fails. A failing check also fails the
+     run. Later runs update the issue and comment only when the outcome
+     changes, not for each new nightly.
+   - "bb X passes: widen engines.bb to include it" when a stable release outside
+     `engines.bb` passes.
+   - A passing prerelease opens nothing and closes an open prerelease issue.
+     A prerelease result never replaces an open issue about a stable release.
 
-Once you widen `engines.bb` and release, the next run on the latest BB closes
-the issue. Pull requests from forks and Dependabot run the checks but skip the
+An issue about a stable release closes when a run on the latest BB finds it
+inside `engines.bb`. Pull requests from forks and Dependabot run the checks but skip the
 issue, because their token is read-only.
 
 ## Installation
 
-Add `.github/workflows/bb-compat.yml` to the plugin:
+Use an open-ended range such as `"engines": { "bb": ">=0.50.1" }`, so new BB
+releases do not lock users out, and let the daily nightly run warn you before a
+breaking change reaches stable. Then fix forward. Add
+`.github/workflows/bb-compat.yml` to the plugin:
 
 ```yaml
 name: BB compat
 
 on:
   schedule:
-    - cron: "23 6 * * 1"
+    - cron: "23 6 * * *"
   workflow_dispatch:
     inputs:
       bb-version:
-        description: bb-app version or dist-tag to test (empty means latest)
+        description: bb-app version or dist-tag to test (empty means nightly)
         default: ""
   pull_request:
     paths:
@@ -64,20 +72,20 @@ jobs:
   compat:
     uses: ysskrishna/bb-plugin-ci/.github/workflows/bb-compat.yml@v1
     with:
-      bb-version: ${{ inputs.bb-version }}
+      bb-version: ${{ inputs.bb-version || 'nightly' }}
       codex-version: 0.169.0
       apt-packages: lsof procps
 ```
 
-The `pull_request` trigger only runs the workflow on a PR that changes the
-caller file itself. To try a newer BB before it is the latest, dispatch with
-`bb-version: nightly` or an exact version.
+Scheduled and pull request runs test the nightly. The `pull_request` trigger
+only runs on a PR that changes the caller file itself. Dispatch with
+`bb-version: latest` or an exact version to test something else.
 
 ### Inputs
 
 | Input | Default | Purpose |
 | --- | --- | --- |
-| `bb-version` | empty (latest) | bb-app version or dist-tag to test. |
+| `bb-version` | empty (latest) | bb-app version or dist-tag to test. The recommended caller passes `nightly`. |
 | `checks` | `npm run typecheck` and `npm run e2e:smoke` | One command per line. |
 | `node-version` | `22` | Node.js version. |
 | `codex-version` | empty | Installs `@openai/codex` globally, for scratch e2e fixtures that need it. |
@@ -99,9 +107,11 @@ caller grants `contents: read` and `issues: write`.
 
 `.github/workflows/self-test.yml` runs on pull requests and pushes to `main` that
 change a workflow. It runs `bb-compat` against [Idle Compact](https://github.com/ysskrishna/bb-idle-compact)
-with the BB nightly, which opens a `bb-compat` issue in this repository, then
-with the latest BB, which closes it. A last job fails unless both happened. See
-the [self-test runs](https://github.com/ysskrishna/bb-plugin-ci/actions/workflows/self-test.yml)
+three times: with the BB nightly (the full install, typecheck and smoke path),
+with bb 0.50.0 and a trivial check (which opens a "widen engines.bb" issue in
+this repository), and with the latest BB (which closes it). A last job fails
+unless all three behaved. See the
+[self-test runs](https://github.com/ysskrishna/bb-plugin-ci/actions/workflows/self-test.yml)
 and the [bb-compat issues](https://github.com/ysskrishna/bb-plugin-ci/issues?q=label%3Abb-compat) they produced.
 
 ## Versions

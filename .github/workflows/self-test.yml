@@ -1,9 +1,11 @@
 name: Self-test
 
-# Runs bb-compat against Idle Compact twice. First the BB nightly, a
-# prerelease, so the full install, check and smoke path runs and this
-# repository gets a bb-compat issue. Then the latest BB, which is inside
-# engines.bb, so nothing is tested and that issue is closed again.
+# Runs bb-compat against Idle Compact three times:
+# 1. The BB nightly, a prerelease: the full install, typecheck and smoke path
+#    runs. A pass opens no issue.
+# 2. bb 0.50.0, a stable release below engines.bb, with a trivial check: it
+#    passes, so this repository gets a "widen engines.bb" issue.
+# 3. The latest BB, inside engines.bb: nothing is tested, and that issue closes.
 on:
   pull_request:
     paths:
@@ -19,13 +21,13 @@ permissions:
   contents: read
   issues: write
 
-# Both runs share this repository's one bb-compat issue, so never overlap.
+# The runs share this repository's one bb-compat issue, so never overlap.
 concurrency:
   group: self-test
   cancel-in-progress: false
 
 jobs:
-  newer:
+  nightly:
     uses: ./.github/workflows/bb-compat.yml
     with:
       repository: ysskrishna/bb-idle-compact
@@ -33,8 +35,17 @@ jobs:
       codex-version: 0.169.0
       apt-packages: lsof procps
 
+  older:
+    needs: nightly
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/bb-compat.yml
+    with:
+      repository: ysskrishna/bb-idle-compact
+      bb-version: 0.50.0
+      checks: node --version
+
   current:
-    needs: newer
+    needs: older
     if: ${{ !cancelled() }}
     uses: ./.github/workflows/bb-compat.yml
     with:
@@ -43,23 +54,26 @@ jobs:
       apt-packages: lsof procps
 
   verify:
-    needs: [newer, current]
+    needs: [nightly, older, current]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions: {}
     steps:
       - env:
-          NEWER: ${{ toJSON(needs.newer.outputs) }}
+          NIGHTLY: ${{ toJSON(needs.nightly.outputs) }}
+          OLDER: ${{ toJSON(needs.older.outputs) }}
           CURRENT: ${{ toJSON(needs.current.outputs) }}
         run: |
-          echo "newer: $NEWER"
+          echo "nightly: $NIGHTLY"
+          echo "older: $OLDER"
           echo "current: $CURRENT"
           node -e '
-            const newer = JSON.parse(process.env.NEWER);
-            const current = JSON.parse(process.env.CURRENT);
+            const [nightly, older, current] = ["NIGHTLY", "OLDER", "CURRENT"].map((name) => JSON.parse(process.env[name]));
             const expect = (ok, what) => { if (!ok) throw new Error(what); };
-            expect(newer.tested === "true", "the nightly run did not test");
-            expect(["created", "updated"].includes(newer.action), "the nightly run did not open an issue");
+            expect(nightly.tested === "true", "the nightly run did not test");
+            expect(["none", "closed"].includes(nightly.action), "a passing nightly run should open no issue");
+            expect(older.tested === "true", "the bb 0.50.0 run did not test");
+            expect(["created", "updated"].includes(older.action), "the bb 0.50.0 run did not open an issue");
             expect(current.tested === "false", "the latest run tested; is latest outside engines.bb?");
-            expect(current.action === "closed" && current.issue === newer.issue, "the latest run did not close that issue");
+            expect(current.action === "closed" && current.issue === older.issue, "the latest run did not close that issue");
           '

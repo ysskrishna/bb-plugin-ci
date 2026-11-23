@@ -3,11 +3,11 @@
 ## Scope
 
 This repository holds reusable GitHub Actions workflows for BB plugins. Today
-that is `bb-compat`: it warns a plugin author when a BB release falls outside
-the plugin's `engines.bb`. BB itself owns install and update compatibility
-(`bb plugin outdated`, `bb plugin update`); do not duplicate those here. Plugin
-specific steps belong in the plugin's caller workflow inputs, not in this
-repository.
+that is `bb-compat`: it warns a plugin author when the BB nightly, or a stable
+BB release outside the plugin's `engines.bb`, breaks the plugin's checks. BB
+itself owns install and update compatibility (`bb plugin outdated`,
+`bb plugin update`); do not duplicate those here. Plugin specific steps belong
+in the plugin's caller workflow inputs, not in this repository.
 
 ## Workflow rules
 
