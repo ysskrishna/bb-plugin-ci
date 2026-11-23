@@ -9,7 +9,8 @@ name: Self-test
 #    fail-on-error off so the run stays green. It opens "bb X fails: false".
 # 4. passes: the latest BB with always-test and the default typecheck and smoke
 #    test, the recommended daily pattern. It passes and closes that issue.
-# verify checks all four.
+# verify checks all four. "current" assumes the latest BB is inside Idle
+# Compact's engines.bb, which holds once its range is open-ended (>=0.50.1).
 on:
   pull_request:
     paths:

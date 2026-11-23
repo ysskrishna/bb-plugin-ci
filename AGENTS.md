@@ -3,8 +3,8 @@
 ## Scope
 
 This repository holds reusable GitHub Actions workflows for BB plugins. Today
-that is `bb-compat`: it warns a plugin author when a BB release (by default the
-latest stable one, tested daily) breaks the plugin's checks. BB itself owns
+that is `bb-compat`: it warns a plugin author when a BB release breaks the
+plugin's checks. The recommended caller tests the latest stable BB daily. BB itself owns
 install and update compatibility (`bb plugin outdated`, `bb plugin update`); do
 not duplicate those here. Plugin specific steps belong in the plugin's caller
 workflow inputs, not in this repository.
