@@ -78,7 +78,7 @@ jobs:
     with:
       bb-version: ${{ inputs.bb-version }}
       always-test: true
-      codex-version: 0.169.0
+      codex-version: latest
       apt-packages: lsof procps
 ```
 
@@ -96,7 +96,7 @@ version; scheduling the nightly is not recommended, because it breaks often.
 | `fail-on-error` | `true` | Fail the run when a check fails. When off, only the issue records it. |
 | `checks` | `npm run typecheck` and `npm run e2e:smoke` | One command per line. |
 | `node-version` | `22` | Node.js version. |
-| `codex-version` | empty | Installs `@openai/codex` globally, for scratch e2e fixtures that need it. |
+| `codex-version` | empty | Installs `@openai/codex` globally (a version or `latest`), for scratch e2e fixtures that need it. |
 | `apt-packages` | empty | Space-separated apt packages, for example `lsof procps`. |
 | `setup` | empty | Extra shell commands after `npm ci`, for example a Playwright browser install. |
 | `repository` | calling repository | Plugin repository to check out. Used by this repo's self-test. |
@@ -115,7 +115,7 @@ caller grants `contents: read` and `issues: write`.
 
 `.github/workflows/self-test.yml` runs on pull requests and pushes to `main` that
 change a workflow. It runs `bb-compat` against [Idle Compact](https://github.com/ysskrishna/bb-idle-compact)
-four times: a fixed BB nightly with the full checks (opens a prerelease issue in
+four times: the current BB nightly with the full checks (opens a prerelease issue in
 this repository), the latest BB without `always-test` (tests nothing, closes
 it), the latest BB with `always-test` and a check that always fails, with
 `fail-on-error` off (opens "fails"), and the latest BB with `always-test` and
