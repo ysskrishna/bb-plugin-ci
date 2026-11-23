@@ -1,9 +1,10 @@
 name: BB compat
 
 # Reusable workflow. When a BB release falls outside the plugin's engines.bb,
-# or is a prerelease such as the nightly, run the plugin's checks against it.
-# Keep one open `bb-compat` issue for a failure (or a stable release that
-# needs engines.bb widened), and close it once the cause is gone.
+# is a prerelease asked for by bb-version, or always-test is set, run the
+# plugin's checks against it and keep one open `bb-compat` issue with the
+# result. Close that issue once the plugin passes, or once engines.bb includes
+# the latest BB.
 on:
   workflow_call:
     outputs:
@@ -11,7 +12,7 @@ on:
         description: "true when the checks ran"
         value: ${{ jobs.check.outputs.test }}
       action:
-        description: "What happened to the bb-compat issue: created, reopened, updated, closed or none"
+        description: "What happened to the bb-compat issue: created, updated, closed or none"
         value: ${{ jobs.report.outputs.action }}
       issue:
         description: The bb-compat issue number acted on, if any
@@ -40,6 +41,14 @@ on:
         description: Extra shell commands to run after npm ci.
         type: string
         default: ""
+      always-test:
+        description: Run the checks even when the BB under test is a stable release inside engines.bb.
+        type: boolean
+        default: false
+      fail-on-error:
+        description: Fail the run when a check fails. When false, the failure is only reported in the issue.
+        type: boolean
+        default: true
       checks:
         description: One command per line, each run with a clean environment (only PATH and HOME).
         type: string
@@ -58,6 +67,7 @@ jobs:
       range: ${{ steps.resolve.outputs.range }}
       prerelease: ${{ steps.resolve.outputs.prerelease }}
       latest: ${{ steps.resolve.outputs.latest }}
+      in-range: ${{ steps.resolve.outputs.in-range }}
       test: ${{ steps.resolve.outputs.test }}
       sdk: ${{ steps.install.outputs.sdk }}
       failed: ${{ steps.checks.outputs.failed }}
@@ -73,6 +83,7 @@ jobs:
         id: resolve
         env:
           BB_VERSION: ${{ inputs.bb-version || 'latest' }}
+          ALWAYS_TEST: ${{ inputs.always-test }}
         run: |
           set -euo pipefail
           version=$(npm view "bb-app@$BB_VERSION" version)
@@ -89,9 +100,11 @@ jobs:
           prerelease=false; [[ "$version" == *-* ]] && prerelease=true
           latest=false; [ "$version" = "$(npm view bb-app@latest version)" ] && latest=true
           # A prerelease is only tested when asked for, and then always tested.
-          test=true; [ "$in_range" = true ] && [ "$prerelease" = false ] && test=false
+          test=true
+          [ "$in_range" = true ] && [ "$prerelease" = false ] && [ "$ALWAYS_TEST" != true ] && test=false
           echo "bb-app $version, engines.bb $range, in range: $in_range, prerelease: $prerelease, test: $test"
-          { echo "version=$version"; echo "range=$range"; echo "prerelease=$prerelease"; echo "latest=$latest"; echo "test=$test"; } >> "$GITHUB_OUTPUT"
+          { echo "version=$version"; echo "range=$range"; echo "prerelease=$prerelease"; echo "latest=$latest"
+            echo "in-range=$in_range"; echo "test=$test"; } >> "$GITHUB_OUTPUT"
       - if: steps.resolve.outputs.test == 'true'
         run: npm ci
       - if: steps.resolve.outputs.test == 'true' && inputs.apt-packages != ''
@@ -134,7 +147,14 @@ jobs:
         if: steps.resolve.outputs.test == 'true'
         env:
           CHECKS: ${{ inputs.checks }}
+          FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
         run: |
+          fail() {
+            echo "failed=$1" >> "$GITHUB_OUTPUT"
+            if [ "$FAIL_ON_ERROR" = true ]; then echo "::error::$2"; exit 1; fi
+            echo "::warning::$2 (fail-on-error is off; the issue records it)"
+            exit 0
+          }
           ran=0
           while IFS= read -r cmd; do
             [[ -z "${cmd// /}" ]] && continue
@@ -142,18 +162,12 @@ jobs:
             echo "::group::$cmd"
             if ! env -i PATH="$PATH" HOME="$HOME" bash -euo pipefail -c "$cmd"; then
               echo "::endgroup::"
-              echo "::error::Check failed: $cmd"
-              echo "failed=$cmd" >> "$GITHUB_OUTPUT"
-              exit 1
+              fail "$cmd" "Check failed: $cmd"
             fi
             echo "::endgroup::"
           done <<< "$CHECKS"
-          if [ "$ran" -eq 0 ]; then
-            echo "::error::The checks input has no commands"
-            echo "failed=(the checks input is empty)" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-      - if: failure()
+          if [ "$ran" -eq 0 ]; then fail "(the checks input is empty)" "The checks input has no commands"; fi
+      - if: failure() || steps.checks.outputs.failed != ''
         uses: actions/upload-artifact@v4
         with:
           name: bb-compat-${{ steps.resolve.outputs.version }}-${{ github.run_attempt }}
@@ -187,6 +201,7 @@ jobs:
           VERSION: ${{ needs.check.outputs.version }}
           RANGE: ${{ needs.check.outputs.range }}
           PRERELEASE: ${{ needs.check.outputs.prerelease }}
+          IN_RANGE: ${{ needs.check.outputs.in-range }}
           TESTED: ${{ needs.check.outputs.test }}
           SDK: ${{ needs.check.outputs.sdk }}
           RESULT: ${{ needs.check.result }}
@@ -199,50 +214,41 @@ jobs:
             --json number,title --jq '.[] | "\(.number) \(.title)"')
           number=${open%% *}
           title=${open#* }
-          old_version=$(cut -d' ' -f2 <<< "$title")
-          old_prerelease=false; [[ "$old_version" == *-* ]] && old_prerelease=true
-          # An issue about a stable release is settled once engines.bb includes it.
-          if [ -n "$number" ] && [ "$old_prerelease" = false ] &&
-            npx --yes semver@7 --range "$RANGE" "$old_version" > /dev/null 2>&1; then
-            gh issue close "$number" --comment "engines.bb \`$RANGE\` now includes bb $old_version. Run: $RUN_URL"
-            echo "Closed #$number: engines.bb includes bb $old_version." >> "$GITHUB_STEP_SUMMARY"
-            closed=$number number="" title=""
-          fi
           if [ "$TESTED" != true ]; then
-            if [ -n "${closed:-}" ]; then
-              { echo "action=closed"; echo "issue=$closed"; } >> "$GITHUB_OUTPUT"
+            # Only the latest BB decides that engines.bb has caught up.
+            if [ "$LATEST" = true ] && [ -n "$number" ]; then
+              gh issue close "$number" --comment "engines.bb \`$RANGE\` includes the latest bb, $VERSION. Run: $RUN_URL"
+              { echo "action=closed"; echo "issue=$number"; } >> "$GITHUB_OUTPUT"
             else
               echo "action=none" >> "$GITHUB_OUTPUT"
             fi
             echo "bb $VERSION is inside engines.bb $RANGE; nothing to test." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          if [ "$PRERELEASE" = true ] && [ -n "$number" ] && [ "$old_prerelease" = false ]; then
-            echo "bb $VERSION: $RESULT. Left issue #$number alone: a prerelease result does not replace a stable one." >> "$GITHUB_STEP_SUMMARY"
-            echo "action=none" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ "$PRERELEASE" = true ] && [ "$RESULT" = success ]; then
-            # A passing prerelease needs no action, and settles an earlier prerelease failure.
-            if [ -n "$number" ]; then
-              gh issue close "$number" --comment "bb $VERSION passes the checks. Run: $RUN_URL"
-              { echo "action=closed"; echo "issue=$number"; } >> "$GITHUB_OUTPUT"
-            elif [ -n "${closed:-}" ]; then
-              { echo "action=closed"; echo "issue=$closed"; } >> "$GITHUB_OUTPUT"
-            else
-              echo "action=none" >> "$GITHUB_OUTPUT"
+          ok=true
+          if [ -n "$FAILED" ] || [ "$RESULT" != success ]; then ok=false; fi
+          if [ "$IN_RANGE" = true ] && [ "$PRERELEASE" = false ]; then
+            # Tested because of always-test: a pass settles any open issue.
+            if [ "$ok" = true ]; then
+              if [ -n "$number" ]; then
+                gh issue close "$number" --comment "bb $VERSION passes the checks. Run: $RUN_URL"
+                { echo "action=closed"; echo "issue=$number"; } >> "$GITHUB_OUTPUT"
+              else
+                echo "action=none" >> "$GITHUB_OUTPUT"
+              fi
+              echo "bb $VERSION passes the checks." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
             fi
-            echo "bb $VERSION (prerelease) passes the checks." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          if [ "$PRERELEASE" = true ]; then
+            intro="bb-app $VERSION (plugin SDK ${SDK:-unknown}) is inside \`engines.bb\` \`$RANGE\` of $PLUGIN."
+          elif [ "$PRERELEASE" = true ]; then
             intro="bb-app $VERSION (plugin SDK ${SDK:-unknown}) is a prerelease. \`engines.bb\` of $PLUGIN is \`$RANGE\`."
-            closes="closes it when a later prerelease passes"
           else
             intro="bb-app $VERSION (plugin SDK ${SDK:-unknown}) is outside \`engines.bb\` \`$RANGE\` of $PLUGIN."
-            closes="closes it once \`engines.bb\` includes the latest bb"
           fi
-          if [ "$RESULT" = success ]; then
+          if [ "$ok" = true ] && [ "$PRERELEASE" = true ]; then
+            new_title="bb $VERSION passes the checks (prerelease)"
+            outcome="All checks passed. Nothing to change until a stable release falls outside \`engines.bb\`."
+          elif [ "$ok" = true ]; then
             new_title="bb $VERSION passes: widen engines.bb to include it"
             outcome="All checks passed, so it is safe to widen \`engines.bb\` to include $VERSION."
           elif [ -n "$FAILED" ]; then
@@ -261,26 +267,20 @@ jobs:
 
           Run: $RUN_URL
 
-          The bb-compat workflow updates this issue and $closes."
+          The bb-compat workflow updates this issue and closes it once the checks pass or \`engines.bb\` includes the latest bb."
           echo "$body" >> "$GITHUB_STEP_SUMMARY"
-          if [ -z "$number" ]; then
-            # Reuse the most recent closed issue so a flaky result does not open a new one each time.
-            last=$(gh issue list --label bb-compat --state closed --limit 1 --json number --jq '.[].number')
-            if [ -n "$last" ]; then
-              gh issue reopen "$last"
-              gh issue edit "$last" --title "$new_title" --body "$body"
-              gh issue comment "$last" --body "Reopened: $new_title. Run: $RUN_URL"
-              { echo "action=reopened"; echo "issue=$last"; } >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
+          old_version=$(cut -d' ' -f2 <<< "$title")
+          if [ "$PRERELEASE" = true ] && [ -n "$number" ] && [[ "$old_version" != *-* ]]; then
+            echo "Left issue #$number alone: a prerelease result does not replace a stable one." >> "$GITHUB_STEP_SUMMARY"
+            echo "action=none" >> "$GITHUB_OUTPUT"
+          elif [ -z "$number" ]; then
             gh label create bb-compat --color FBCA04 --description "BB compatibility check" --force
             url=$(gh issue create --title "$new_title" --body "$body" --label bb-compat)
             echo "$url"
             { echo "action=created"; echo "issue=${url##*/}"; } >> "$GITHUB_OUTPUT"
           else
             gh issue edit "$number" --title "$new_title" --body "$body"
-            # Comment only when the outcome changes, not for each new nightly version.
-            if [ "${title#bb * }" != "${new_title#bb * }" ]; then
+            if [ "$title" != "$new_title" ]; then
               gh issue comment "$number" --body "Result changed: $new_title. Run: $RUN_URL"
             fi
             { echo "action=updated"; echo "issue=$number"; } >> "$GITHUB_OUTPUT"

@@ -9,47 +9,46 @@ Shared GitHub Actions workflows for [BB](https://getbb.app) plugins.
 
 BB already refuses to install or update a plugin whose `engines.bb` excludes the
 running BB. What it cannot do is warn the plugin author before a new BB release
-leaves the plugin behind. The `bb-compat` workflow does that: the recommended
-caller runs it every day against the BB nightly, so a breaking change shows up
-before it reaches a stable release.
+leaves the plugin behind, or before an update to BB breaks a plugin whose range
+already allows it. The `bb-compat` workflow does that: the recommended caller
+runs the plugin's checks every day against the latest stable BB.
 
 ## Features
 
 | Workflow | What it does |
 | --- | --- |
-| **bb-compat** | Tests a plugin against the BB nightly (or a stable release outside its `engines.bb`) and keeps one `bb-compat` issue while something needs attention. |
+| **bb-compat** | Tests a plugin against the latest stable BB (or a release or prerelease you ask for) and keeps one `bb-compat` issue while something needs attention. |
 
 How `bb-compat` works:
 
-1. It resolves the `bb-version` input (a version or dist-tag such as `nightly`;
-   empty means `latest`) and reads `engines.bb` from the plugin's `package.json`.
-2. If that BB is a stable release inside `engines.bb`, it tests nothing and ends
-   green.
-3. Otherwise (a prerelease such as the nightly, or a stable release outside
-   `engines.bb`) it runs `npm ci`, installs that `bb-app` plus the `@get-bb/plugin-sdk`
-   version the release ships (read from its bundle), sets `engines.bb` in the
-   working copy to that version (BB will not run a plugin outside it), and runs
-   the plugin's checks, each with only `PATH` and `HOME` set.
-4. It keeps at most one open issue labelled `bb-compat`, with a link to the run:
-   - "bb X fails: <check>" when a check fails. A failing check also fails the
-     run. Later runs update the issue and comment only when the outcome
-     changes, not for each new nightly.
-   - "bb X passes: widen engines.bb to include it" when a stable release outside
-     `engines.bb` passes.
-   - A passing prerelease opens nothing and closes an open prerelease issue.
-     A prerelease result never replaces an open issue about a stable release.
-   - Instead of opening a new issue, it reopens the most recent closed one, so a
-     flaky nightly does not leave a trail of issues.
+1. It resolves `bb-app@latest` (or the `bb-version` input) and reads `engines.bb`
+   from the plugin's `package.json`.
+2. If that BB is a stable release inside `engines.bb` and `always-test` is off,
+   it tests nothing and ends green. When that BB is the latest, it also closes
+   any open `bb-compat` issue.
+3. Otherwise it runs `npm ci`, installs that `bb-app` plus the
+   `@get-bb/plugin-sdk` version the release ships (read from its bundle), sets
+   `engines.bb` in the working copy to that version (BB will not run a plugin
+   outside it), and runs the plugin's checks, each with only `PATH` and `HOME`
+   set. A failing check fails the run unless `fail-on-error` is off.
+4. It keeps one open issue labelled `bb-compat`, with a link to the run:
+   - Inside `engines.bb` (with `always-test`): a pass closes any open issue; a
+     failure opens or updates "bb X fails: <check>".
+   - Outside `engines.bb`: "bb X passes: widen engines.bb to include it" or
+     "bb X fails: <check>".
+   - A prerelease: "bb X passes the checks (prerelease)" or "bb X fails:
+     <check>". A prerelease result never replaces an open issue about a
+     stable release.
 
-Any run closes an issue about a stable release once `engines.bb` includes that
-release. Pull requests from forks and Dependabot run the checks but skip the
+Once you widen `engines.bb` and release, the next run on the latest BB closes
+the issue. Pull requests from forks and Dependabot run the checks but skip the
 issue, because their token is read-only.
 
 ## Installation
 
 Use an open-ended range such as `"engines": { "bb": ">=0.50.1" }`, so new BB
-releases do not lock users out, and let the daily nightly run warn you before a
-breaking change reaches stable. Then fix forward. Add
+releases do not lock users out, and let the daily run against the latest stable
+BB tell you when one breaks the plugin. Then fix forward. Add
 `.github/workflows/bb-compat.yml` to the plugin:
 
 ```yaml
@@ -61,7 +60,7 @@ on:
   workflow_dispatch:
     inputs:
       bb-version:
-        description: bb-app version or dist-tag to test (empty means nightly)
+        description: bb-app version or dist-tag to test (empty means latest)
         default: ""
   pull_request:
     paths:
@@ -75,20 +74,24 @@ jobs:
   compat:
     uses: ysskrishna/bb-plugin-ci/.github/workflows/bb-compat.yml@v1
     with:
-      bb-version: ${{ inputs.bb-version || 'nightly' }}
+      bb-version: ${{ inputs.bb-version }}
+      always-test: true
       codex-version: 0.169.0
       apt-packages: lsof procps
 ```
 
-Scheduled and pull request runs test the nightly. The `pull_request` trigger
-only runs on a PR that changes the caller file itself. Dispatch with
-`bb-version: latest` or an exact version to test something else.
+Scheduled and pull request runs test the latest stable BB. The `pull_request`
+trigger only runs on a PR that changes the caller file itself. To try a BB
+before it is stable, dispatch by hand with `bb-version: nightly` or an exact
+version; scheduling the nightly is not recommended, because it breaks often.
 
 ### Inputs
 
 | Input | Default | Purpose |
 | --- | --- | --- |
-| `bb-version` | empty (latest) | bb-app version or dist-tag to test. The recommended caller passes `nightly`. |
+| `bb-version` | empty (latest) | bb-app version or dist-tag to test. |
+| `always-test` | `false` | Test a stable release even when it is inside `engines.bb`. The recommended caller sets it. |
+| `fail-on-error` | `true` | Fail the run when a check fails. When off, only the issue records it. |
 | `checks` | `npm run typecheck` and `npm run e2e:smoke` | One command per line. |
 | `node-version` | `22` | Node.js version. |
 | `codex-version` | empty | Installs `@openai/codex` globally, for scratch e2e fixtures that need it. |
@@ -96,8 +99,8 @@ only runs on a PR that changes the caller file itself. Dispatch with
 | `setup` | empty | Extra shell commands after `npm ci`, for example a Playwright browser install. |
 | `repository` | calling repository | Plugin repository to check out. Used by this repo's self-test. |
 
-Outputs: `tested` (`true` when the checks ran), `action` (`created`, `reopened`,
-`updated`, `closed` or `none`; empty when the issue step is skipped) and `issue` (the issue
+Outputs: `tested` (`true` when the checks ran), `action` (`created`, `updated`,
+`closed` or `none`; empty when the issue step is skipped) and `issue` (the issue
 number acted on).
 
 ### Permissions
@@ -110,11 +113,13 @@ caller grants `contents: read` and `issues: write`.
 
 `.github/workflows/self-test.yml` runs on pull requests and pushes to `main` that
 change a workflow. It runs `bb-compat` against [Idle Compact](https://github.com/ysskrishna/bb-idle-compact)
-three times: with the BB nightly and a trivial check (no issue), with bb 0.50.0
-and the full typecheck and smoke test (which opens this repository's
-"widen engines.bb" issue), and with the latest BB (nothing to test). A last job
-checks all three and closes the issue again. See the
-[self-test runs](https://github.com/ysskrishna/bb-plugin-ci/actions/workflows/self-test.yml)
+four times: the BB nightly with a trivial check (opens a prerelease issue in
+this repository), the latest BB without `always-test` (tests nothing, closes
+it), the latest BB with `always-test` and a check that always fails, with
+`fail-on-error` off (opens "fails"), and the latest BB with `always-test` and
+the full typecheck and smoke test (passes, closes it). A last job fails unless
+all four behaved. See
+the [self-test runs](https://github.com/ysskrishna/bb-plugin-ci/actions/workflows/self-test.yml)
 and the [bb-compat issues](https://github.com/ysskrishna/bb-plugin-ci/issues?q=label%3Abb-compat) they produced.
 
 ## Versions
