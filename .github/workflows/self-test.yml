@@ -1,8 +1,8 @@
 name: Self-test
 
-# Runs bb-compat against Idle Compact twice. First the BB nightly, which is
-# outside its engines.bb, so the full install, check and smoke path runs and
-# this repository gets a bb-compat issue. Then the latest BB, which is inside
+# Runs bb-compat against Idle Compact twice. First the BB nightly, a
+# prerelease, so the full install, check and smoke path runs and this
+# repository gets a bb-compat issue. Then the latest BB, which is inside
 # engines.bb, so nothing is tested and that issue is closed again.
 on:
   pull_request:
@@ -25,7 +25,31 @@ jobs:
 
   current:
     needs: newer
-    if: always()
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/bb-compat.yml
     with:
       repository: ysskrishna/bb-idle-compact
+      codex-version: 0.169.0
+      apt-packages: lsof procps
+
+  verify:
+    needs: [newer, current]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - env:
+          NEWER: ${{ toJSON(needs.newer.outputs) }}
+          CURRENT: ${{ toJSON(needs.current.outputs) }}
+        run: |
+          echo "newer: $NEWER"
+          echo "current: $CURRENT"
+          node -e '
+            const newer = JSON.parse(process.env.NEWER);
+            const current = JSON.parse(process.env.CURRENT);
+            const expect = (ok, what) => { if (!ok) throw new Error(what); };
+            expect(newer.tested === "true", "the nightly run did not test");
+            expect(["created", "updated"].includes(newer.action), "the nightly run did not open an issue");
+            expect(current.tested === "false", "the latest run tested; is latest outside engines.bb?");
+            expect(current.action === "closed" && current.issue === newer.issue, "the latest run did not close that issue");
+          '

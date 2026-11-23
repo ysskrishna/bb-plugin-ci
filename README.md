@@ -10,16 +10,19 @@ leaves the plugin behind. `bb-compat` does that:
 
 1. It resolves `bb-app@latest` (or the `bb-version` input) and reads `engines.bb`
    from the plugin's `package.json`.
-2. If that BB already satisfies `engines.bb`, it tests nothing, closes any open
-   `bb-compat` issue, and ends green.
-3. Otherwise it runs `npm ci`, installs that `bb-app` plus the
-   `@get-bb/plugin-sdk` version the release ships (read from its bundle), and
-   runs the plugin's checks, each with only `PATH` and `HOME` set.
+2. If that BB is a stable release inside `engines.bb`, it tests nothing and ends
+   green. When that BB is the latest, it also closes any open `bb-compat` issue.
+3. Otherwise (a stable release outside `engines.bb`, or a prerelease you asked
+   for) it runs `npm ci`, installs that `bb-app` plus the `@get-bb/plugin-sdk`
+   version the release ships (read from its bundle), and runs the plugin's
+   checks, each with only `PATH` and `HOME` set.
 4. It keeps one open issue labelled `bb-compat`: "bb X passes: widen engines.bb
-   to include it", or "bb X fails: <check>" with a link to the run. A failing
-   check also fails the run.
+   to include it", "bb X passes the checks (prerelease)", or "bb X fails:
+   <check>", with a link to the run. A failing check also fails the run.
 
-Once you widen `engines.bb` and release, the next run closes the issue.
+Once you widen `engines.bb` and release, the next run on the latest BB closes
+the issue. Pull requests from forks and Dependabot run the checks but skip the
+issue, because their token is read-only.
 
 ### Use it
 
@@ -69,6 +72,9 @@ caller file itself. To try a newer BB before it is the latest, dispatch with
 | `setup` | empty | Extra shell commands after `npm ci`, for example a Playwright browser install. |
 | `repository` | calling repository | Plugin repository to check out. Used by this repo's self-test. |
 
+Outputs: `tested` (`true` when the checks ran), `action` (`created`, `updated`,
+`closed` or `none`) and `issue` (the issue number acted on).
+
 ### Permissions
 
 The job that runs plugin code gets `contents: read` only and does not keep the
@@ -88,7 +94,7 @@ tag instead.
 `.github/workflows/self-test.yml` runs on pull requests that change a workflow.
 It runs `bb-compat` against [Idle Compact](https://github.com/ysskrishna/bb-idle-compact)
 with the BB nightly, which opens a `bb-compat` issue in this repository, then
-with the latest BB, which closes it.
+with the latest BB, which closes it. A last job fails unless both happened.
 
 ## License
 

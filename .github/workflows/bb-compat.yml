@@ -1,10 +1,21 @@
 name: BB compat
 
-# Reusable workflow. When a BB release falls outside the plugin's engines.bb,
-# run the plugin's checks against it and keep one open `bb-compat` issue with
-# the result. When engines.bb includes the release, close that issue.
+# Reusable workflow. When a BB release falls outside the plugin's engines.bb
+# (or is a prerelease asked for by bb-version), run the plugin's checks against
+# it and keep one open `bb-compat` issue with the result. When engines.bb
+# includes the latest BB, close that issue.
 on:
   workflow_call:
+    outputs:
+      tested:
+        description: "true when the checks ran"
+        value: ${{ jobs.check.outputs.test }}
+      action:
+        description: "What happened to the bb-compat issue: created, updated, closed or none"
+        value: ${{ jobs.report.outputs.action }}
+      issue:
+        description: The bb-compat issue number acted on, if any
+        value: ${{ jobs.report.outputs.issue }}
     inputs:
       bb-version:
         description: bb-app version or dist-tag to test. Empty means latest.
@@ -45,7 +56,8 @@ jobs:
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       range: ${{ steps.resolve.outputs.range }}
-      in-range: ${{ steps.resolve.outputs.in-range }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+      test: ${{ steps.resolve.outputs.test }}
       sdk: ${{ steps.install.outputs.sdk }}
       failed: ${{ steps.checks.outputs.failed }}
     steps:
@@ -66,46 +78,62 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::bb-app@$BB_VERSION resolved to '$version'"; exit 1; }
           range=$(node -p 'require("./package.json").engines?.bb ?? ""')
           [ -n "$range" ] || { echo "::error::package.json has no engines.bb"; exit 1; }
-          in_range=false
-          if npx --yes semver@7 --range "$range" "$version" >/dev/null; then in_range=true; fi
-          echo "bb-app $version, engines.bb $range, in range: $in_range"
-          { echo "version=$version"; echo "range=$range"; echo "in-range=$in_range"; } >> "$GITHUB_OUTPUT"
-      - if: steps.resolve.outputs.in-range == 'false'
+          npm install --prefix "$RUNNER_TEMP/semver" --no-audit --no-fund --silent semver@7
+          in_range=$(node -e '
+            const semver = require(process.argv[1]);
+            const [range, version] = process.argv.slice(2);
+            if (!semver.validRange(range)) throw new Error(`engines.bb is not a valid range: ${range}`);
+            console.log(semver.satisfies(version, range));
+          ' "$RUNNER_TEMP/semver/node_modules/semver" "$range" "$version")
+          prerelease=false; [[ "$version" == *-* ]] && prerelease=true
+          # A prerelease is only tested when asked for, and then always tested.
+          test=true; [ "$in_range" = true ] && [ "$prerelease" = false ] && test=false
+          echo "bb-app $version, engines.bb $range, in range: $in_range, prerelease: $prerelease, test: $test"
+          { echo "version=$version"; echo "range=$range"; echo "prerelease=$prerelease"; echo "test=$test"; } >> "$GITHUB_OUTPUT"
+      - if: steps.resolve.outputs.test == 'true'
         run: npm ci
-      - if: steps.resolve.outputs.in-range == 'false' && inputs.apt-packages != ''
+      - if: steps.resolve.outputs.test == 'true' && inputs.apt-packages != ''
         env:
           APT_PACKAGES: ${{ inputs.apt-packages }}
         run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
-      - if: steps.resolve.outputs.in-range == 'false' && inputs.codex-version != ''
+      - if: steps.resolve.outputs.test == 'true' && inputs.codex-version != ''
         env:
           CODEX_VERSION: ${{ inputs.codex-version }}
         run: npm install --global "@openai/codex@$CODEX_VERSION"
-      - if: steps.resolve.outputs.in-range == 'false' && inputs.setup != ''
+      - if: steps.resolve.outputs.test == 'true' && inputs.setup != ''
         env:
           SETUP: ${{ inputs.setup }}
         run: bash -euo pipefail -c "$SETUP"
       - name: Install bb-app and the plugin SDK it ships
         id: install
-        if: steps.resolve.outputs.in-range == 'false'
+        if: steps.resolve.outputs.test == 'true'
         env:
           VERSION: ${{ steps.resolve.outputs.version }}
         run: |
           set -euo pipefail
           tarball=$(npm pack "bb-app@$VERSION" --silent --pack-destination "$RUNNER_TEMP")
-          sdk=$(tar -xzOf "$RUNNER_TEMP/$tarball" package/dist/index.js | grep -oE 'PLUGIN_SDK_VERSION ?= ?"[^"]+"' | sort -u | cut -d'"' -f2)
+          sdk=$(tar -xzOf "$RUNNER_TEMP/$tarball" package/dist/index.js | grep -oE 'PLUGIN_SDK_VERSION ?= ?"[^"]+"' | sort -u | cut -d'"' -f2 || true)
           [[ "$sdk" =~ ^[0-9]+\.[0-9]+\.[0-9]+[^[:space:]]*$ ]] || { echo "::error::No single PLUGIN_SDK_VERSION in bb-app $VERSION: '$sdk'"; exit 1; }
           npm install --no-save --no-audit --no-fund "bb-app@$VERSION" "@get-bb/plugin-sdk@$sdk"
-          node -e 'const v = require("bb-app/package.json").version; if (v !== process.argv[1]) throw new Error(`installed bb-app ${v}`)' "$VERSION"
+          node -e '
+            const { readFileSync } = require("node:fs");
+            const installed = (name) => JSON.parse(readFileSync(`node_modules/${name}/package.json`, "utf8")).version;
+            for (const [name, want] of [["bb-app", process.argv[1]], ["@get-bb/plugin-sdk", process.argv[2]]]) {
+              if (installed(name) !== want) throw new Error(`wanted ${name} ${want}, installed ${installed(name)}`);
+            }
+          ' "$VERSION" "$sdk"
           echo "bb-app $VERSION ships @get-bb/plugin-sdk $sdk"
           echo "sdk=$sdk" >> "$GITHUB_OUTPUT"
       - name: Run checks
         id: checks
-        if: steps.resolve.outputs.in-range == 'false'
+        if: steps.resolve.outputs.test == 'true'
         env:
           CHECKS: ${{ inputs.checks }}
         run: |
+          ran=0
           while IFS= read -r cmd; do
             [[ -z "${cmd// /}" ]] && continue
+            ran=$((ran + 1))
             echo "::group::$cmd"
             if ! env -i PATH="$PATH" HOME="$HOME" bash -euo pipefail -c "$cmd"; then
               echo "::endgroup::"
@@ -115,28 +143,42 @@ jobs:
             fi
             echo "::endgroup::"
           done <<< "$CHECKS"
+          [ "$ran" -gt 0 ] || { echo "::error::The checks input has no commands"; exit 1; }
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: bb-compat-${{ steps.resolve.outputs.version }}
+          name: bb-compat-${{ steps.resolve.outputs.version }}-${{ github.run_attempt }}
           path: e2e-artifacts/
           if-no-files-found: ignore
 
   report:
     needs: check
-    if: always() && needs.check.outputs.version != '' && needs.check.result != 'cancelled'
+    # Fork and Dependabot pull requests get a read-only token, so they skip the issue.
+    if: >-
+      !cancelled() && needs.check.outputs.version != '' &&
+      (github.event_name != 'pull_request' ||
+       (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'))
     runs-on: ubuntu-latest
     permissions:
       issues: write
+    concurrency:
+      group: bb-compat-report-${{ github.repository }}
+      cancel-in-progress: false
+    outputs:
+      action: ${{ steps.issue.outputs.action }}
+      issue: ${{ steps.issue.outputs.issue }}
     steps:
       - name: Open, update or close the bb-compat issue
+        id: issue
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PLUGIN: ${{ inputs.repository || github.repository }}
+          LATEST: ${{ inputs.bb-version == '' || inputs.bb-version == 'latest' }}
           VERSION: ${{ needs.check.outputs.version }}
           RANGE: ${{ needs.check.outputs.range }}
-          IN_RANGE: ${{ needs.check.outputs.in-range }}
+          PRERELEASE: ${{ needs.check.outputs.prerelease }}
+          TESTED: ${{ needs.check.outputs.test }}
           SDK: ${{ needs.check.outputs.sdk }}
           RESULT: ${{ needs.check.result }}
           FAILED: ${{ needs.check.outputs.failed }}
@@ -148,14 +190,26 @@ jobs:
             --json number,title --jq '.[] | "\(.number) \(.title)"')
           number=${open%% *}
           title=${open#* }
-          if [ "$IN_RANGE" = true ]; then
-            if [ -n "$number" ]; then
-              gh issue close "$number" --comment "engines.bb \`$RANGE\` includes bb $VERSION. Run: $RUN_URL"
+          if [ "$TESTED" != true ]; then
+            # Only the latest BB decides that engines.bb has caught up.
+            if [ "$LATEST" = true ] && [ -n "$number" ]; then
+              gh issue close "$number" --comment "engines.bb \`$RANGE\` includes the latest bb, $VERSION. Run: $RUN_URL"
+              { echo "action=closed"; echo "issue=$number"; } >> "$GITHUB_OUTPUT"
+            else
+              echo "action=none" >> "$GITHUB_OUTPUT"
             fi
             echo "bb $VERSION is inside engines.bb $RANGE; nothing to test." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          if [ "$RESULT" = success ]; then
+          if [ "$PRERELEASE" = true ]; then
+            intro="bb-app $VERSION (plugin SDK ${SDK:-unknown}) is a prerelease. \`engines.bb\` of $PLUGIN is \`$RANGE\`."
+          else
+            intro="bb-app $VERSION (plugin SDK ${SDK:-unknown}) is outside \`engines.bb\` \`$RANGE\` of $PLUGIN."
+          fi
+          if [ "$RESULT" = success ] && [ "$PRERELEASE" = true ]; then
+            new_title="bb $VERSION passes the checks (prerelease)"
+            outcome="All checks passed. Nothing to change until a stable release falls outside \`engines.bb\`."
+          elif [ "$RESULT" = success ]; then
             new_title="bb $VERSION passes: widen engines.bb to include it"
             outcome="All checks passed, so it is safe to widen \`engines.bb\` to include $VERSION."
           elif [ -n "$FAILED" ]; then
@@ -165,7 +219,7 @@ jobs:
             new_title="bb $VERSION fails during setup"
             outcome="Setup failed before the checks ran (npm ci, tools, or the bb-app and SDK install). See the run log."
           fi
-          body="bb-app $VERSION (plugin SDK ${SDK:-unknown}) is outside \`engines.bb\` \`$RANGE\` of $PLUGIN.
+          body="$intro
 
           $outcome
 
@@ -178,10 +232,13 @@ jobs:
           echo "$body" >> "$GITHUB_STEP_SUMMARY"
           if [ -z "$number" ]; then
             gh label create bb-compat --color FBCA04 --description "BB compatibility check" --force
-            gh issue create --title "$new_title" --body "$body" --label bb-compat
+            url=$(gh issue create --title "$new_title" --body "$body" --label bb-compat)
+            echo "$url"
+            { echo "action=created"; echo "issue=${url##*/}"; } >> "$GITHUB_OUTPUT"
           else
             gh issue edit "$number" --title "$new_title" --body "$body"
             if [ "$title" != "$new_title" ]; then
               gh issue comment "$number" --body "Result changed: $new_title. Run: $RUN_URL"
             fi
+            { echo "action=updated"; echo "issue=$number"; } >> "$GITHUB_OUTPUT"
           fi
