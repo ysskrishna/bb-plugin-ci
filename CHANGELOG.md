@@ -6,8 +6,8 @@
 
 ### Fixed
 
-- Prerelease runs: the working-copy `engines.bb` now allows the base version too (`>=0.50.2 || 0.50.2-nightly.N`), because a BB nightly reports itself as its base version. Before, BB refused to start the plugin and every nightly smoke test failed with "status: incompatible".
-- The self-test's nightly job runs the default typecheck and smoke test, so it covers this path.
+- Prerelease runs: the working-copy `engines.bb` now allows the base version too (`0.50.2 || 0.50.2-nightly.N`), because BB checks its own version without the prerelease tag. Before, BB refused to start the plugin and every nightly smoke test failed with "status: incompatible".
+- The self-test's nightly job runs the default typecheck and smoke test against a fixed nightly, so it covers this path without depending on the latest nightly.
 
 ## [1.1.0]
 

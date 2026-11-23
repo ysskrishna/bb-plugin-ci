@@ -1,7 +1,7 @@
 name: Self-test
 
 # Runs bb-compat against Idle Compact four times, in order:
-# 1. nightly: the BB nightly (a prerelease) with the default typecheck and
+# 1. nightly: a fixed BB nightly (a prerelease) with the default typecheck and
 #    smoke test. It passes and opens a "passes the checks (prerelease)" issue.
 # 2. current: the latest BB, inside engines.bb, without always-test. Nothing is
 #    tested, and that issue closes.
@@ -36,7 +36,8 @@ jobs:
     uses: ./.github/workflows/bb-compat.yml
     with:
       repository: ysskrishna/bb-idle-compact
-      bb-version: nightly
+      # A fixed nightly, so a later nightly regression does not fail unrelated PRs.
+      bb-version: 0.50.2-nightly.45053684132.1
       codex-version: 0.169.0
       apt-packages: lsof procps
 

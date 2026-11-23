@@ -28,9 +28,10 @@ How `bb-compat` works:
    any open `bb-compat` issue.
 3. Otherwise it runs `npm ci`, installs that `bb-app` plus the
    `@get-bb/plugin-sdk` version the release ships (read from its bundle), sets
-   `engines.bb` in the working copy to that version, plus its base version for
-   a prerelease (BB will not run a plugin outside it), and runs the plugin's checks, each with only `PATH` and `HOME`
-   set. A failing check fails the run unless `fail-on-error` is off.
+   `engines.bb` in the working copy to that version (plus its base version for a
+   prerelease, because BB will not run a plugin outside its range), and runs the
+   plugin's checks, each with only `PATH` and `HOME` set. A failing check fails
+   the run unless `fail-on-error` is off.
 4. It keeps one open issue labelled `bb-compat`, with a link to the run:
    - Inside `engines.bb` (with `always-test`): a pass on the latest BB, or on
      the version the open issue is about, closes it; a failure opens or
@@ -114,7 +115,7 @@ caller grants `contents: read` and `issues: write`.
 
 `.github/workflows/self-test.yml` runs on pull requests and pushes to `main` that
 change a workflow. It runs `bb-compat` against [Idle Compact](https://github.com/ysskrishna/bb-idle-compact)
-four times: the BB nightly with the full checks (opens a prerelease issue in
+four times: a fixed BB nightly with the full checks (opens a prerelease issue in
 this repository), the latest BB without `always-test` (tests nothing, closes
 it), the latest BB with `always-test` and a check that always fails, with
 `fail-on-error` off (opens "fails"), and the latest BB with `always-test` and
