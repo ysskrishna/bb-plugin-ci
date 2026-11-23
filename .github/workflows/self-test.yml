@@ -1,11 +1,13 @@
 name: Self-test
 
-# Runs bb-compat against Idle Compact three times:
-# 1. The BB nightly, a prerelease: the full install, typecheck and smoke path
-#    runs. A pass opens no issue.
-# 2. bb 0.50.0, a stable release below engines.bb, with a trivial check: it
-#    passes, so this repository gets a "widen engines.bb" issue.
-# 3. The latest BB, inside engines.bb: nothing is tested, and that issue closes.
+# Runs bb-compat against Idle Compact three times, then checks the results:
+# 1. The BB nightly with a trivial check: the prerelease install path runs, and
+#    a pass opens no issue.
+# 2. bb 0.50.0, a stable release below engines.bb, with the default typecheck
+#    and smoke test: it passes, so this repository's one bb-compat issue opens
+#    (or reopens) as "widen engines.bb".
+# 3. The latest BB, inside engines.bb: nothing is tested.
+# verify asserts all three, then closes that issue for the next run.
 on:
   pull_request:
     paths:
@@ -32,8 +34,7 @@ jobs:
     with:
       repository: ysskrishna/bb-idle-compact
       bb-version: nightly
-      codex-version: 0.169.0
-      apt-packages: lsof procps
+      checks: node --version
 
   older:
     needs: nightly
@@ -42,7 +43,8 @@ jobs:
     with:
       repository: ysskrishna/bb-idle-compact
       bb-version: 0.50.0
-      checks: node --version
+      codex-version: 0.169.0
+      apt-packages: lsof procps
 
   current:
     needs: older
@@ -50,19 +52,22 @@ jobs:
     uses: ./.github/workflows/bb-compat.yml
     with:
       repository: ysskrishna/bb-idle-compact
-      codex-version: 0.169.0
-      apt-packages: lsof procps
 
   verify:
     needs: [nightly, older, current]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    permissions: {}
+    permissions:
+      issues: write
     steps:
       - env:
           NIGHTLY: ${{ toJSON(needs.nightly.outputs) }}
           OLDER: ${{ toJSON(needs.older.outputs) }}
           CURRENT: ${{ toJSON(needs.current.outputs) }}
+          ISSUE: ${{ needs.older.outputs.issue }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           echo "nightly: $NIGHTLY"
           echo "older: $OLDER"
@@ -70,10 +75,12 @@ jobs:
           node -e '
             const [nightly, older, current] = ["NIGHTLY", "OLDER", "CURRENT"].map((name) => JSON.parse(process.env[name]));
             const expect = (ok, what) => { if (!ok) throw new Error(what); };
-            expect(nightly.tested === "true", "the nightly run did not test");
-            expect(["none", "closed"].includes(nightly.action), "a passing nightly run should open no issue");
+            expect(nightly.tested === "true" && nightly.action === "none", "the nightly run should test and open no issue");
             expect(older.tested === "true", "the bb 0.50.0 run did not test");
-            expect(["created", "updated"].includes(older.action), "the bb 0.50.0 run did not open an issue");
-            expect(current.tested === "false", "the latest run tested; is latest outside engines.bb?");
-            expect(current.action === "closed" && current.issue === older.issue, "the latest run did not close that issue");
+            expect(["created", "reopened", "updated"].includes(older.action), "the bb 0.50.0 run did not open an issue");
+            expect(current.tested === "false" && current.action === "none", "the latest run should test nothing and leave the issue");
           '
+          title=$(gh issue view "$ISSUE" --json title --jq .title)
+          echo "issue #$ISSUE: $title"
+          [ "$title" = "bb 0.50.0 passes: widen engines.bb to include it" ]
+          gh issue close "$ISSUE" --comment "Self-test done. Run: $RUN_URL"

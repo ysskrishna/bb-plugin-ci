@@ -24,12 +24,12 @@ How `bb-compat` works:
 1. It resolves the `bb-version` input (a version or dist-tag such as `nightly`;
    empty means `latest`) and reads `engines.bb` from the plugin's `package.json`.
 2. If that BB is a stable release inside `engines.bb`, it tests nothing and ends
-   green. When that BB is the latest, it also closes any open `bb-compat` issue.
+   green.
 3. Otherwise (a prerelease such as the nightly, or a stable release outside
    `engines.bb`) it runs `npm ci`, installs that `bb-app` plus the `@get-bb/plugin-sdk`
    version the release ships (read from its bundle), and runs the plugin's
    checks, each with only `PATH` and `HOME` set.
-4. It keeps one open issue labelled `bb-compat`, with a link to the run:
+4. It keeps at most one open issue labelled `bb-compat`, with a link to the run:
    - "bb X fails: <check>" when a check fails. A failing check also fails the
      run. Later runs update the issue and comment only when the outcome
      changes, not for each new nightly.
@@ -37,9 +37,11 @@ How `bb-compat` works:
      `engines.bb` passes.
    - A passing prerelease opens nothing and closes an open prerelease issue.
      A prerelease result never replaces an open issue about a stable release.
+   - Instead of opening a new issue, it reopens the most recent closed one, so a
+     flaky nightly does not leave a trail of issues.
 
-An issue about a stable release closes when a run on the latest BB finds it
-inside `engines.bb`. Pull requests from forks and Dependabot run the checks but skip the
+Any run closes an issue about a stable release once `engines.bb` includes that
+release. Pull requests from forks and Dependabot run the checks but skip the
 issue, because their token is read-only.
 
 ## Installation
@@ -93,8 +95,8 @@ only runs on a PR that changes the caller file itself. Dispatch with
 | `setup` | empty | Extra shell commands after `npm ci`, for example a Playwright browser install. |
 | `repository` | calling repository | Plugin repository to check out. Used by this repo's self-test. |
 
-Outputs: `tested` (`true` when the checks ran), `action` (`created`, `updated`,
-`closed` or `none`; empty when the issue step is skipped) and `issue` (the issue
+Outputs: `tested` (`true` when the checks ran), `action` (`created`, `reopened`,
+`updated`, `closed` or `none`; empty when the issue step is skipped) and `issue` (the issue
 number acted on).
 
 ### Permissions
@@ -107,10 +109,10 @@ caller grants `contents: read` and `issues: write`.
 
 `.github/workflows/self-test.yml` runs on pull requests and pushes to `main` that
 change a workflow. It runs `bb-compat` against [Idle Compact](https://github.com/ysskrishna/bb-idle-compact)
-three times: with the BB nightly (the full install, typecheck and smoke path),
-with bb 0.50.0 and a trivial check (which opens a "widen engines.bb" issue in
-this repository), and with the latest BB (which closes it). A last job fails
-unless all three behaved. See the
+three times: with the BB nightly and a trivial check (no issue), with bb 0.50.0
+and the full typecheck and smoke test (which opens this repository's
+"widen engines.bb" issue), and with the latest BB (nothing to test). A last job
+checks all three and closes the issue again. See the
 [self-test runs](https://github.com/ysskrishna/bb-plugin-ci/actions/workflows/self-test.yml)
 and the [bb-compat issues](https://github.com/ysskrishna/bb-plugin-ci/issues?q=label%3Abb-compat) they produced.
 

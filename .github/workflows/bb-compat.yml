@@ -11,7 +11,7 @@ on:
         description: "true when the checks ran"
         value: ${{ jobs.check.outputs.test }}
       action:
-        description: "What happened to the bb-compat issue: created, updated, closed or none"
+        description: "What happened to the bb-compat issue: created, reopened, updated, closed or none"
         value: ${{ jobs.report.outputs.action }}
       issue:
         description: The bb-compat issue number acted on, if any
@@ -198,12 +198,16 @@ jobs:
           title=${open#* }
           old_version=$(cut -d' ' -f2 <<< "$title")
           old_prerelease=false; [[ "$old_version" == *-* ]] && old_prerelease=true
+          # An issue about a stable release is settled once engines.bb includes it.
+          if [ -n "$number" ] && [ "$old_prerelease" = false ] &&
+            npx --yes semver@7 --range "$RANGE" "$old_version" > /dev/null 2>&1; then
+            gh issue close "$number" --comment "engines.bb \`$RANGE\` now includes bb $old_version. Run: $RUN_URL"
+            echo "Closed #$number: engines.bb includes bb $old_version." >> "$GITHUB_STEP_SUMMARY"
+            closed=$number number="" title=""
+          fi
           if [ "$TESTED" != true ]; then
-            # The latest stable BB inside engines.bb settles an issue about a
-            # stable release. An issue about a prerelease waits for one that passes.
-            if [ "$LATEST" = true ] && [ -n "$number" ] && [ "$old_prerelease" = false ]; then
-              gh issue close "$number" --comment "engines.bb \`$RANGE\` includes the latest bb, $VERSION. Run: $RUN_URL"
-              { echo "action=closed"; echo "issue=$number"; } >> "$GITHUB_OUTPUT"
+            if [ -n "${closed:-}" ]; then
+              { echo "action=closed"; echo "issue=$closed"; } >> "$GITHUB_OUTPUT"
             else
               echo "action=none" >> "$GITHUB_OUTPUT"
             fi
@@ -220,6 +224,8 @@ jobs:
             if [ -n "$number" ]; then
               gh issue close "$number" --comment "bb $VERSION passes the checks. Run: $RUN_URL"
               { echo "action=closed"; echo "issue=$number"; } >> "$GITHUB_OUTPUT"
+            elif [ -n "${closed:-}" ]; then
+              { echo "action=closed"; echo "issue=$closed"; } >> "$GITHUB_OUTPUT"
             else
               echo "action=none" >> "$GITHUB_OUTPUT"
             fi
@@ -255,6 +261,15 @@ jobs:
           The bb-compat workflow updates this issue and $closes."
           echo "$body" >> "$GITHUB_STEP_SUMMARY"
           if [ -z "$number" ]; then
+            # Reuse the most recent closed issue so a flaky result does not open a new one each time.
+            last=$(gh issue list --label bb-compat --state closed --limit 1 --json number --jq '.[].number')
+            if [ -n "$last" ]; then
+              gh issue reopen "$last"
+              gh issue edit "$last" --title "$new_title" --body "$body"
+              gh issue comment "$last" --body "Reopened: $new_title. Run: $RUN_URL"
+              { echo "action=reopened"; echo "issue=$last"; } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             gh label create bb-compat --color FBCA04 --description "BB compatibility check" --force
             url=$(gh issue create --title "$new_title" --body "$body" --label bb-compat)
             echo "$url"
