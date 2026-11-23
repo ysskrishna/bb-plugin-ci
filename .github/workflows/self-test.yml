@@ -2,7 +2,8 @@ name: Self-test
 
 # Runs bb-compat against Idle Compact four times, in order:
 # 1. nightly: the current BB nightly (a prerelease) with the default typecheck
-#    and smoke test. It passes and opens a "passes the checks (prerelease)" issue.
+#    and smoke test, with fail-on-error off. It opens an issue either way:
+#    "passes the checks (prerelease)" or "fails: <check>".
 # 2. current: the latest BB, inside engines.bb, without always-test. Nothing is
 #    tested, and that issue closes.
 # 3. fails: the latest BB with always-test and a check that always fails, with
@@ -37,6 +38,8 @@ jobs:
     with:
       repository: ysskrishna/bb-idle-compact
       bb-version: nightly
+      # A broken nightly is recorded in the issue, not as a red run on every PR.
+      fail-on-error: false
       codex-version: latest
       apt-packages: lsof procps
 

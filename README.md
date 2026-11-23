@@ -115,7 +115,7 @@ caller grants `contents: read` and `issues: write`.
 
 `.github/workflows/self-test.yml` runs on pull requests and pushes to `main` that
 change a workflow. It runs `bb-compat` against [Idle Compact](https://github.com/ysskrishna/bb-idle-compact)
-four times: the current BB nightly with the full checks (opens a prerelease issue in
+four times: the current BB nightly with the full checks and `fail-on-error` off (opens an issue in
 this repository), the latest BB without `always-test` (tests nothing, closes
 it), the latest BB with `always-test` and a check that always fails, with
 `fail-on-error` off (opens "fails"), and the latest BB with `always-test` and

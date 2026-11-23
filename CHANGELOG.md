@@ -7,7 +7,7 @@
 ### Fixed
 
 - Prerelease runs: the working-copy `engines.bb` now allows the base version too (`0.50.2 || 0.50.2-nightly.N`), because BB checks its own version without the prerelease tag. Before, BB refused to start the plugin and every nightly smoke test failed with "status: incompatible".
-- The self-test's nightly job runs the default typecheck and smoke test against the current nightly, resolved at run time, so it covers this path.
+- The self-test's nightly job runs the default typecheck and smoke test against the current nightly, resolved at run time, so it covers this path. It runs with `fail-on-error` off, so a broken nightly is recorded in an issue instead of failing every workflow PR.
 - The self-test and the README caller example install the latest Codex CLI instead of a pinned version, so nothing needs a manual bump.
 
 ## [1.1.0]
