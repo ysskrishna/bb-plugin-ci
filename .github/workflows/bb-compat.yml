@@ -1,0 +1,187 @@
+name: BB compat
+
+# Reusable workflow. When a BB release falls outside the plugin's engines.bb,
+# run the plugin's checks against it and keep one open `bb-compat` issue with
+# the result. When engines.bb includes the release, close that issue.
+on:
+  workflow_call:
+    inputs:
+      bb-version:
+        description: bb-app version or dist-tag to test. Empty means latest.
+        type: string
+        default: ""
+      repository:
+        description: Plugin repository to check out. Empty means the calling repository.
+        type: string
+        default: ""
+      node-version:
+        type: string
+        default: "22"
+      codex-version:
+        description: Install this @openai/codex version globally. Empty skips it.
+        type: string
+        default: ""
+      apt-packages:
+        description: Space-separated apt packages to install, for example "lsof procps".
+        type: string
+        default: ""
+      setup:
+        description: Extra shell commands to run after npm ci.
+        type: string
+        default: ""
+      checks:
+        description: One command per line, each run with a clean environment (only PATH and HOME).
+        type: string
+        default: |
+          npm run typecheck
+          npm run e2e:smoke
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      range: ${{ steps.resolve.outputs.range }}
+      in-range: ${{ steps.resolve.outputs.in-range }}
+      sdk: ${{ steps.install.outputs.sdk }}
+      failed: ${{ steps.checks.outputs.failed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+      - name: Resolve bb-app and engines.bb
+        id: resolve
+        env:
+          BB_VERSION: ${{ inputs.bb-version || 'latest' }}
+        run: |
+          set -euo pipefail
+          version=$(npm view "bb-app@$BB_VERSION" version)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::bb-app@$BB_VERSION resolved to '$version'"; exit 1; }
+          range=$(node -p 'require("./package.json").engines?.bb ?? ""')
+          [ -n "$range" ] || { echo "::error::package.json has no engines.bb"; exit 1; }
+          in_range=false
+          if npx --yes semver@7 --range "$range" "$version" >/dev/null; then in_range=true; fi
+          echo "bb-app $version, engines.bb $range, in range: $in_range"
+          { echo "version=$version"; echo "range=$range"; echo "in-range=$in_range"; } >> "$GITHUB_OUTPUT"
+      - if: steps.resolve.outputs.in-range == 'false'
+        run: npm ci
+      - if: steps.resolve.outputs.in-range == 'false' && inputs.apt-packages != ''
+        env:
+          APT_PACKAGES: ${{ inputs.apt-packages }}
+        run: sudo apt-get update && sudo apt-get install -y $APT_PACKAGES
+      - if: steps.resolve.outputs.in-range == 'false' && inputs.codex-version != ''
+        env:
+          CODEX_VERSION: ${{ inputs.codex-version }}
+        run: npm install --global "@openai/codex@$CODEX_VERSION"
+      - if: steps.resolve.outputs.in-range == 'false' && inputs.setup != ''
+        env:
+          SETUP: ${{ inputs.setup }}
+        run: bash -euo pipefail -c "$SETUP"
+      - name: Install bb-app and the plugin SDK it ships
+        id: install
+        if: steps.resolve.outputs.in-range == 'false'
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          tarball=$(npm pack "bb-app@$VERSION" --silent --pack-destination "$RUNNER_TEMP")
+          sdk=$(tar -xzOf "$RUNNER_TEMP/$tarball" package/dist/index.js | grep -oE 'PLUGIN_SDK_VERSION ?= ?"[^"]+"' | sort -u | cut -d'"' -f2)
+          [[ "$sdk" =~ ^[0-9]+\.[0-9]+\.[0-9]+[^[:space:]]*$ ]] || { echo "::error::No single PLUGIN_SDK_VERSION in bb-app $VERSION: '$sdk'"; exit 1; }
+          npm install --no-save --no-audit --no-fund "bb-app@$VERSION" "@get-bb/plugin-sdk@$sdk"
+          node -e 'const v = require("bb-app/package.json").version; if (v !== process.argv[1]) throw new Error(`installed bb-app ${v}`)' "$VERSION"
+          echo "bb-app $VERSION ships @get-bb/plugin-sdk $sdk"
+          echo "sdk=$sdk" >> "$GITHUB_OUTPUT"
+      - name: Run checks
+        id: checks
+        if: steps.resolve.outputs.in-range == 'false'
+        env:
+          CHECKS: ${{ inputs.checks }}
+        run: |
+          while IFS= read -r cmd; do
+            [[ -z "${cmd// /}" ]] && continue
+            echo "::group::$cmd"
+            if ! env -i PATH="$PATH" HOME="$HOME" bash -euo pipefail -c "$cmd"; then
+              echo "::endgroup::"
+              echo "::error::Check failed: $cmd"
+              echo "failed=$cmd" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            echo "::endgroup::"
+          done <<< "$CHECKS"
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bb-compat-${{ steps.resolve.outputs.version }}
+          path: e2e-artifacts/
+          if-no-files-found: ignore
+
+  report:
+    needs: check
+    if: always() && needs.check.outputs.version != '' && needs.check.result != 'cancelled'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open, update or close the bb-compat issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PLUGIN: ${{ inputs.repository || github.repository }}
+          VERSION: ${{ needs.check.outputs.version }}
+          RANGE: ${{ needs.check.outputs.range }}
+          IN_RANGE: ${{ needs.check.outputs.in-range }}
+          SDK: ${{ needs.check.outputs.sdk }}
+          RESULT: ${{ needs.check.result }}
+          FAILED: ${{ needs.check.outputs.failed }}
+          CHECKS: ${{ inputs.checks }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          open=$(gh issue list --label bb-compat --state open --limit 1 \
+            --json number,title --jq '.[] | "\(.number) \(.title)"')
+          number=${open%% *}
+          title=${open#* }
+          if [ "$IN_RANGE" = true ]; then
+            if [ -n "$number" ]; then
+              gh issue close "$number" --comment "engines.bb \`$RANGE\` includes bb $VERSION. Run: $RUN_URL"
+            fi
+            echo "bb $VERSION is inside engines.bb $RANGE; nothing to test." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$RESULT" = success ]; then
+            new_title="bb $VERSION passes: widen engines.bb to include it"
+            outcome="All checks passed, so it is safe to widen \`engines.bb\` to include $VERSION."
+          elif [ -n "$FAILED" ]; then
+            new_title="bb $VERSION fails: $FAILED"
+            outcome="\`$FAILED\` failed. See the run log for details."
+          else
+            new_title="bb $VERSION fails during setup"
+            outcome="Setup failed before the checks ran (npm ci, tools, or the bb-app and SDK install). See the run log."
+          fi
+          body="bb-app $VERSION (plugin SDK ${SDK:-unknown}) is outside \`engines.bb\` \`$RANGE\` of $PLUGIN.
+
+          $outcome
+
+          Checks:
+          $(sed '/^[[:space:]]*$/d; s/^/- `/; s/$/`/' <<< "$CHECKS")
+
+          Run: $RUN_URL
+
+          The bb-compat workflow updates this issue and closes it once \`engines.bb\` includes the latest bb."
+          echo "$body" >> "$GITHUB_STEP_SUMMARY"
+          if [ -z "$number" ]; then
+            gh label create bb-compat --color FBCA04 --description "BB compatibility check" --force
+            gh issue create --title "$new_title" --body "$body" --label bb-compat
+          else
+            gh issue edit "$number" --title "$new_title" --body "$body"
+            if [ "$title" != "$new_title" ]; then
+              gh issue comment "$number" --body "Result changed: $new_title. Run: $RUN_URL"
+            fi
+          fi

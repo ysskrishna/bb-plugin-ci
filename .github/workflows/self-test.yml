@@ -1,0 +1,31 @@
+name: Self-test
+
+# Runs bb-compat against Idle Compact twice. First the BB nightly, which is
+# outside its engines.bb, so the full install, check and smoke path runs and
+# this repository gets a bb-compat issue. Then the latest BB, which is inside
+# engines.bb, so nothing is tested and that issue is closed again.
+on:
+  pull_request:
+    paths:
+      - .github/workflows/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  newer:
+    uses: ./.github/workflows/bb-compat.yml
+    with:
+      repository: ysskrishna/bb-idle-compact
+      bb-version: nightly
+      codex-version: 0.169.0
+      apt-packages: lsof procps
+
+  current:
+    needs: newer
+    if: always()
+    uses: ./.github/workflows/bb-compat.yml
+    with:
+      repository: ysskrishna/bb-idle-compact
