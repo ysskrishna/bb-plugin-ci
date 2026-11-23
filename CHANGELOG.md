@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [1.1.1]
+
+### Fixed
+
+- Prerelease runs: the working-copy `engines.bb` now allows the base version too (`>=0.50.2 || 0.50.2-nightly.N`), because a BB nightly reports itself as its base version. Before, BB refused to start the plugin and every nightly smoke test failed with "status: incompatible".
+- The self-test's nightly job runs the default typecheck and smoke test, so it covers this path.
+
 ## [1.1.0]
 
 ### Added

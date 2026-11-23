@@ -138,20 +138,25 @@ jobs:
             }
           ' "$VERSION" "$sdk"
           # BB refuses to run a plugin whose engines.bb excludes it, so the
-          # working copy (never committed) declares the version under test.
+          # working copy (never committed) declares the version under test. A
+          # nightly such as 0.50.2-nightly.N reports itself as 0.50.2, so a
+          # prerelease also allows its base version.
           # Replace only the value, so the file keeps its formatting for format checks.
-          node -e '
+          engines=$(node -e '
             const fs = require("node:fs");
             const [version] = process.argv.slice(1);
+            const base = version.split("-")[0];
+            const wanted = base === version ? version : `>=${base} || ${version}`;
             const text = fs.readFileSync("package.json", "utf8");
             const range = JSON.parse(text).engines.bb;
             const from = `"bb": ${JSON.stringify(range)}`;
             if (text.split(from).length !== 2) throw new Error(`cannot find ${from} once in package.json`);
-            const next = text.replace(from, `"bb": ${JSON.stringify(version)}`);
-            if (JSON.parse(next).engines.bb !== version) throw new Error("engines.bb was not updated");
+            const next = text.replace(from, `"bb": ${JSON.stringify(wanted)}`);
+            if (JSON.parse(next).engines.bb !== wanted) throw new Error("engines.bb was not updated");
             fs.writeFileSync("package.json", next);
-          ' "$VERSION"
-          echo "bb-app $VERSION ships @get-bb/plugin-sdk $sdk; engines.bb set to $VERSION for the checks"
+            console.log(wanted);
+          ' "$VERSION")
+          echo "bb-app $VERSION ships @get-bb/plugin-sdk $sdk; engines.bb set to $engines for the checks"
           echo "sdk=$sdk" >> "$GITHUB_OUTPUT"
       - name: Run checks
         id: checks
