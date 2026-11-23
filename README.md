@@ -93,7 +93,8 @@ tag instead.
 
 ## Self-test
 
-`.github/workflows/self-test.yml` runs on pull requests that change a workflow.
+`.github/workflows/self-test.yml` runs on pull requests and pushes to `main` that
+change a workflow.
 It runs `bb-compat` against [Idle Compact](https://github.com/ysskrishna/bb-idle-compact)
 with the BB nightly, which opens a `bb-compat` issue in this repository, then
 with the latest BB, which closes it. A last job fails unless both happened.
