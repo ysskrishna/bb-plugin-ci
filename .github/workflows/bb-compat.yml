@@ -57,6 +57,7 @@ jobs:
       version: ${{ steps.resolve.outputs.version }}
       range: ${{ steps.resolve.outputs.range }}
       prerelease: ${{ steps.resolve.outputs.prerelease }}
+      latest: ${{ steps.resolve.outputs.latest }}
       test: ${{ steps.resolve.outputs.test }}
       sdk: ${{ steps.install.outputs.sdk }}
       failed: ${{ steps.checks.outputs.failed }}
@@ -86,10 +87,11 @@ jobs:
             console.log(semver.satisfies(version, range));
           ' "$RUNNER_TEMP/semver/node_modules/semver" "$range" "$version")
           prerelease=false; [[ "$version" == *-* ]] && prerelease=true
+          latest=false; [ "$version" = "$(npm view bb-app@latest version)" ] && latest=true
           # A prerelease is only tested when asked for, and then always tested.
           test=true; [ "$in_range" = true ] && [ "$prerelease" = false ] && test=false
           echo "bb-app $version, engines.bb $range, in range: $in_range, prerelease: $prerelease, test: $test"
-          { echo "version=$version"; echo "range=$range"; echo "prerelease=$prerelease"; echo "test=$test"; } >> "$GITHUB_OUTPUT"
+          { echo "version=$version"; echo "range=$range"; echo "prerelease=$prerelease"; echo "latest=$latest"; echo "test=$test"; } >> "$GITHUB_OUTPUT"
       - if: steps.resolve.outputs.test == 'true'
         run: npm ci
       - if: steps.resolve.outputs.test == 'true' && inputs.apt-packages != ''
@@ -143,7 +145,11 @@ jobs:
             fi
             echo "::endgroup::"
           done <<< "$CHECKS"
-          [ "$ran" -gt 0 ] || { echo "::error::The checks input has no commands"; exit 1; }
+          if [ "$ran" -eq 0 ]; then
+            echo "::error::The checks input has no commands"
+            echo "failed=(the checks input is empty)" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
       - if: failure()
         uses: actions/upload-artifact@v4
         with:
@@ -174,7 +180,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PLUGIN: ${{ inputs.repository || github.repository }}
-          LATEST: ${{ inputs.bb-version == '' || inputs.bb-version == 'latest' }}
+          LATEST: ${{ needs.check.outputs.latest }}
           VERSION: ${{ needs.check.outputs.version }}
           RANGE: ${{ needs.check.outputs.range }}
           PRERELEASE: ${{ needs.check.outputs.prerelease }}
@@ -230,7 +236,11 @@ jobs:
 
           The bb-compat workflow updates this issue and closes it once \`engines.bb\` includes the latest bb."
           echo "$body" >> "$GITHUB_STEP_SUMMARY"
-          if [ -z "$number" ]; then
+          old_version=$(cut -d' ' -f2 <<< "$title")
+          if [ "$PRERELEASE" = true ] && [ -n "$number" ] && [[ "$old_version" != *-* ]]; then
+            echo "Left issue #$number alone: a prerelease result does not replace a stable one." >> "$GITHUB_STEP_SUMMARY"
+            echo "action=none" >> "$GITHUB_OUTPUT"
+          elif [ -z "$number" ]; then
             gh label create bb-compat --color FBCA04 --description "BB compatibility check" --force
             url=$(gh issue create --title "$new_title" --body "$body" --label bb-compat)
             echo "$url"

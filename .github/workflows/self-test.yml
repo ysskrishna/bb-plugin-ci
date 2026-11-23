@@ -14,6 +14,11 @@ permissions:
   contents: read
   issues: write
 
+# Both runs share this repository's one bb-compat issue, so never overlap.
+concurrency:
+  group: self-test
+  cancel-in-progress: false
+
 jobs:
   newer:
     uses: ./.github/workflows/bb-compat.yml

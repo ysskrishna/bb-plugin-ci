@@ -18,7 +18,8 @@ leaves the plugin behind. `bb-compat` does that:
    checks, each with only `PATH` and `HOME` set.
 4. It keeps one open issue labelled `bb-compat`: "bb X passes: widen engines.bb
    to include it", "bb X passes the checks (prerelease)", or "bb X fails:
-   <check>", with a link to the run. A failing check also fails the run.
+   <check>", with a link to the run. A failing check also fails the run. A
+   prerelease result never replaces an open issue about a stable release.
 
 Once you widen `engines.bb` and release, the next run on the latest BB closes
 the issue. Pull requests from forks and Dependabot run the checks but skip the
@@ -73,7 +74,8 @@ caller file itself. To try a newer BB before it is the latest, dispatch with
 | `repository` | calling repository | Plugin repository to check out. Used by this repo's self-test. |
 
 Outputs: `tested` (`true` when the checks ran), `action` (`created`, `updated`,
-`closed` or `none`) and `issue` (the issue number acted on).
+`closed` or `none`; empty when the issue step is skipped) and `issue` (the issue
+number acted on).
 
 ### Permissions
 
