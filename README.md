@@ -32,8 +32,9 @@ How `bb-compat` works:
    outside it), and runs the plugin's checks, each with only `PATH` and `HOME`
    set. A failing check fails the run unless `fail-on-error` is off.
 4. It keeps one open issue labelled `bb-compat`, with a link to the run:
-   - Inside `engines.bb` (with `always-test`): a pass closes any open issue; a
-     failure opens or updates "bb X fails: <check>".
+   - Inside `engines.bb` (with `always-test`): a pass on the latest BB, or on
+     the version the open issue is about, closes it; a failure opens or
+     updates "bb X fails: <check>".
    - Outside `engines.bb`: "bb X passes: widen engines.bb to include it" or
      "bb X fails: <check>".
    - A prerelease: "bb X passes the checks (prerelease)" or "bb X fails:
